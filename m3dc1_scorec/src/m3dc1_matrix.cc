@@ -79,7 +79,7 @@ int copyField2PetscVec_5(FieldID field_id, Vec petscVec, int scalar_type)
   ierr = VecSetSizes(petscVec, num_own_dof, PETSC_DECIDE); CHKERRQ(ierr);
  * */
   int ierr = VecSetFromOptions(petscVec);CHKERRQ(ierr);
-  VecAssemblyBegin(petscVec);
+//  VecAssemblyBegin(petscVec);
 
   int num_vtx=m3dc1_mesh::instance()->num_local_ent[0];
 
@@ -124,6 +124,7 @@ int copyField2PetscVec_5(FieldID field_id, Vec petscVec, int scalar_type)
   mesh->end(ent_it);
 
   assert(nodeCounter==num_own_ent);
+  VecAssemblyBegin(petscVec);
   ierr=VecAssemblyEnd(petscVec);
   CHKERRQ(ierr);
   PetscFunctionReturn(PETSC_SUCCESS);
@@ -149,7 +150,7 @@ int copyField2PetscVec(FieldID field_id, Vec petscVec, int scalar_type) {
   CHKERRQ(ierr); */
   ierr = VecSetFromOptions(petscVec);
   CHKERRQ(ierr);
-  VecAssemblyBegin(petscVec);
+//  VecAssemblyBegin(petscVec);
 
   int num_vtx = m3dc1_mesh::instance()->num_local_ent[0];
 
@@ -198,6 +199,8 @@ int copyField2PetscVec(FieldID field_id, Vec petscVec, int scalar_type) {
   mesh->end(ent_it);
 
   assert(nodeCounter == num_own_ent);
+  VecAssemblyBegin(petscVec);
+
   ierr = VecAssemblyEnd(petscVec);
   CHKERRQ(ierr);
   return 0;
