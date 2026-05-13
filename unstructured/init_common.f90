@@ -712,8 +712,7 @@ subroutine nre_eq
      dofs = intx2(mu79(:,:,OP_1),nre079(:,OP_1))
      call vector_insert_block(nre_vec%vec,itri,1,dofs,VEC_ADD)
 
-     if ((xmag<maxval(x_79)).and.(xmag>minval(x_79)).and.(zmag>minval(z_79)).and.(zmag<maxval(z_79)) &
-        .and.(minval(phi_79)<=0)) then
+     if ((xmag<maxval(x_79)).and.(xmag>minval(x_79)).and.(zmag>minval(z_79)).and.(zmag<maxval(z_79))) then
         write(0,*) real(sum(ps079(:,OP_GS))*sum(bz079(:,OP_1)))
         bzsign_temp=sign(1.0, real(sum(ps079(:,OP_GS))*sum(bz079(:,OP_1))))
      endif
