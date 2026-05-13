@@ -374,6 +374,7 @@ contains
     use arrays
     use hdf5_output
     use kprad_m3dc1
+    use rmp
 
     implicit none
 
@@ -433,11 +434,16 @@ contains
     end if
 
     if (extsubtract_in.eq.1) then
-       call h5r_read_field(group_id, "psi_ext", psi_ext, nelms, error)
-       call h5r_read_field(group_id,   "I_ext",  bz_ext, nelms, error)
-       call h5r_read_field(group_id,   "f_ext",  bf_ext, nelms, error)       
-       if(irestart_fp.eq.1) then
-          call h5r_read_field(group_id, "fp_ext", bfp_ext, nelms, error)
+       if (iuse_ext_field_ramp .eq. 1) then
+          if (myrank.eq.0 .and. iprint.ge.1) print *, 'Recalculating external fields (iuse_ext_field_ramp=1)'
+          call rmp_per(1)
+       else
+          call h5r_read_field(group_id, "psi_ext", psi_ext, nelms, error)
+          call h5r_read_field(group_id,   "I_ext",  bz_ext, nelms, error)
+          call h5r_read_field(group_id,   "f_ext",  bf_ext, nelms, error)       
+          if(irestart_fp.eq.1) then
+             call h5r_read_field(group_id, "fp_ext", bfp_ext, nelms, error)
+          end if
        end if
     end if
 

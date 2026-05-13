@@ -121,7 +121,7 @@ install_device_data : # device_data
 #	-chmod 755 $(INSTALL_DIR)/bin/convert_sim_sms
 
 .PHONY: install
-install : install_idl install_doc install_device_data install_tutorials #install_scorec
+install : install_idl install_device_data install_tutorials #install_scorec
 	echo $(ARCH)
 	mkdir -m 755 -p $(INSTALL_DIR)
 	mkdir -m 755 -p $(INSTALL_DIR)/batch

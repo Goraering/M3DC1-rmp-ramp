@@ -206,14 +206,14 @@ module basic
   real :: eps         ! size of initial perturbation
   integer :: iwave    ! which wave to initialize in wave prop. equilibrium
   integer :: irmp     ! 1 = read rmp coil/currents from rmp_coil.dat, rmp_current.dat
-  integer :: irmp_inc_start  ! Start of rmpfield ramp up, external field is 0 if ntimes le inc_start
-  integer :: irmp_inc_end    ! End of rmpfield ramp up, external field is equal to the input if ntimes ge inc_end
-  real :: ext_scale          ! Scale factor for the external field
   integer :: iread_ext_field
   integer :: isample_ext_field
   integer :: isample_ext_field_pol
 
   real :: scale_ext_field
+  integer :: iuse_ext_field_ramp
+  logical :: iramp_data = .false.
+  real, dimension(:), allocatable :: ext_field_ramp_data
   integer :: type_ext_field ! 0 = text schaffer field; 1,2 = fieldlines or mgrid file.
   character(len=256) :: file_ext_field ! External field (to be subtracted for ST)
   character(len=256) :: file_total_field ! Stellarator field (plasma+coils) to be read for itaylor=41

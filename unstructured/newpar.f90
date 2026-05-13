@@ -275,21 +275,6 @@ Program Reducedquintic
   ntime0 = ntime
   vloop0 = vloop
 
-  ! Initialize ext_scale based on current ntime before any field evaluations
-  ! This ensures transport coefficients and derived quantities are computed
-  ! with the correct external field scaling from the very start.
-  ext_scale = 1.0_8
-  if (irmp_inc_start .ge. 0 .or. irmp_inc_end .gt. 0) then
-     if (ntime .le. irmp_inc_start) then
-        ext_scale = 0.0_8
-     else if (ntime .ge. irmp_inc_end) then
-        ext_scale = 1.0_8
-     else
-        ext_scale = real(ntime - irmp_inc_start, 8) / real(irmp_inc_end - irmp_inc_start, 8)
-     end if
-     if(myrank.eq.0) print *, 'Initial ext_scale = ', ext_scale
-  end if
-
   ! zero-out scalar data
   call reset_scalars
 
@@ -1413,6 +1398,10 @@ if (ispradapt .eq. 1) then
         call create_field(bz_ext, "bz_ext")
         call create_field(bf_ext, "bf_ext")
         call create_field(bfp_ext, "bfp_ext")
+        psi_ext = 0.
+        bz_ext = 0.
+        bf_ext = 0.
+        bfp_ext = 0.
         use_external_fields = .true.
      end if
 else
@@ -1469,6 +1458,10 @@ else
         call create_field(bz_ext)
         call create_field(bf_ext)
         call create_field(bfp_ext)
+        psi_ext = 0.
+        bz_ext = 0.
+        bf_ext = 0.
+        bfp_ext = 0.
         use_external_fields = .true.
      end if
 endif

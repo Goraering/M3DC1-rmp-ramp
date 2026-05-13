@@ -765,6 +765,9 @@ contains
 
        if(use_external_fields) then 
           call eval_ops(itri, psi_ext, psx79, rfac)
+          if(iramp_data) then
+             psx79 = psx79 * ext_field_ramp_data(ntime)
+          end if
        else
           psx79 = 0.
        end if
@@ -825,6 +828,13 @@ contains
           call eval_ops(itri, bf_ext, bfx79, rfac)
           call eval_ops(itri, bfp_ext, bfpx79, rfac)
 #endif
+          if(iramp_data) then
+             bzx79 = bzx79 * ext_field_ramp_data(ntime)
+#if defined(USECOMPLEX) || defined(USE3D)    
+             bfx79 = bfx79 * ext_field_ramp_data(ntime)
+             bfpx79 = bfpx79 * ext_field_ramp_data(ntime)
+#endif
+          end if
        else
           bzx79 = 0.
           bfx79 = 0.

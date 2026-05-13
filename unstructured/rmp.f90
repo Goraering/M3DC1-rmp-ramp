@@ -27,12 +27,58 @@ subroutine rmp_per(ilin)
   use coils
   use boundary_conditions
   use read_schaffer_field
+  use read_ascii
 
   implicit none
 
   integer :: l, ierr
   character(len=13) :: ext_field_name
   integer, intent(in), optional :: ilin
+  integer :: it_read, last_it, nlines, i
+  real :: scale_read, last_scale
+  integer, allocatable :: temp_time(:)
+  real, allocatable :: temp_scale(:)
+
+  if (iuse_ext_field_ramp .eq. 1) then
+     if(myrank.eq.0 .and. iprint.ge. 2) print *, 'Use external field scaling, reading ext_field_scale'     
+
+     if (.not. allocated(ext_field_ramp_data)) allocate(ext_field_ramp_data(0:ntimemax))
+     ext_field_ramp_data = 1.0
+
+     nlines = 0
+     call read_ascii_column('ext_field_scale', temp_time, nlines, icol=1)
+     
+     nlines = 0
+     call read_ascii_column('ext_field_scale', temp_scale, nlines, icol=2)
+
+     if(myrank.eq.0 .and. iprint.ge.2) print *, 'Done reading ext_field_scale, ', temp_scale
+     if (nlines > 0) then
+        last_scale = 1.0
+        last_it = -1
+        do i = 1, nlines
+           it_read = temp_time(i)
+           scale_read = temp_scale(i)
+           
+           if (it_read >= 0 .and. it_read <= ntimemax) then
+              if (last_it >= 0 .and. it_read > last_it + 1) then
+                 ext_field_ramp_data(last_it+1 : it_read-1) = last_scale
+              end if
+              ext_field_ramp_data(it_read) = scale_read
+              last_scale = scale_read
+              last_it = it_read
+           end if
+        end do
+        if (last_it >= 0 .and. last_it < ntimemax) then
+           ext_field_ramp_data(last_it+1 : ntimemax) = last_scale
+        end if
+        
+        deallocate(temp_time)
+        deallocate(temp_scale)
+     else
+        if(myrank.eq.0) print *, 'Warning: iuse_ext_field_ramp=1 but could not read ext_field_scale'
+     end if
+     iramp_data = .true.
+  end if
 
   if(type_ext_field.le.0) then ! RMP field
      if(iread_ext_field.ge.1) allocate(sf(iread_ext_field))

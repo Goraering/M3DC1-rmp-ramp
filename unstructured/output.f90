@@ -316,7 +316,7 @@ subroutine hdf5_write_parameters(error)
   call write_real_attr(root_id, "zlim2"      , zlim2,       error)
   call write_int_attr (root_id, "ikprad"     , ikprad,      error)
   call write_int_attr (root_id, "kprad_z"    , kprad_z,     error)
-  call write_real_attr(root_id, "bzsign"    , bzsign,       error)
+  call write_real_attr(root_id, "bzsign"     , bzsign,       error)
 
   call h5gclose_f(root_id, error)
 
@@ -967,7 +967,7 @@ subroutine output_regions(group_id, error)
 
 end subroutine output_regions
 
-subroutine write_field(group_id, name, f, nelms, error, isreal,scale)
+subroutine write_field(group_id, name, f, nelms, error, isreal, scale)
   use hdf5
   use basic
   use element
@@ -1000,11 +1000,7 @@ subroutine write_field(group_id, name, f, nelms, error, isreal,scale)
   do i=1, nelms
      call calcavector(i, f, dum(:,i))
   end do
-
-  if(present(scale)) then
-    dum = dum * scale
-  end if
-  
+  if (present(scale)) dum = dum * scale
   call output_field(group_id, name, real(dum), coeffs_per_element, &
        nelms, error)
 #ifdef USECOMPLEX
@@ -1077,7 +1073,8 @@ subroutine output_fields(time_group_id, equilibrium, error)
      do i=1, nelms
         call calcavector(i, psi_ext, dum2(:,i))
      end do
-     dum = dum + dum2 * ext_scale
+     if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
+     dum = dum + dum2
      deallocate(dum2)
   end if
   call output_field(group_id, "psi", real(dum), coeffs_per_element, &
@@ -1113,7 +1110,8 @@ subroutine output_fields(time_group_id, equilibrium, error)
      do i=1, nelms
         call calcavector(i, bz_ext, dum2(:,i))
      end do
-     dum = dum + dum2 * ext_scale
+     if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
+     dum = dum + dum2
      deallocate(dum2)
   end if
   call output_field(group_id, "I", real(dum), coeffs_per_element, &
@@ -1140,7 +1138,8 @@ subroutine output_fields(time_group_id, equilibrium, error)
         do i=1, nelms
            call calcavector(i, bf_ext, dum2(:,i))
         end do
-        dum = dum + dum2 * ext_scale
+        if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
+        dum = dum + dum2
         deallocate(dum2)
      end if
      call output_field(group_id, "f", real(dum), coeffs_per_element, &
@@ -1168,7 +1167,8 @@ subroutine output_fields(time_group_id, equilibrium, error)
         do i=1, nelms
            call calcavector(i, bfp_ext, dum2(:,i))
         end do
-        dum = dum + dum2 * ext_scale
+        if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
+        dum = dum + dum2
         deallocate(dum2)
      end if
      call output_field(group_id, "fp", real(dum), coeffs_per_element, &
@@ -1240,12 +1240,19 @@ subroutine output_fields(time_group_id, equilibrium, error)
      call write_field(group_id, "zst", zst, nelms, error, .true.)
   end if
 #endif
-! Save as raw external field so that the restarted run read it and scale according to ntime
+
   if(use_external_fields) then 
-     call write_field(group_id, "psi_ext", psi_ext, nelms, error)
-     call write_field(group_id, "I_ext", bz_ext, nelms, error)    
-     call write_field(group_id, "f_ext", bf_ext, nelms, error)
-     call write_field(group_id, "fp_ext", bfp_ext, nelms, error)
+     if (iuse_ext_field_ramp .eq. 1) then
+        call write_field(group_id, "psi_ext", psi_ext, nelms, error, scale=ext_field_ramp_data(ntime))
+        call write_field(group_id, "I_ext", bz_ext, nelms, error, scale=ext_field_ramp_data(ntime))    
+        call write_field(group_id, "f_ext", bf_ext, nelms, error, scale=ext_field_ramp_data(ntime))
+        call write_field(group_id, "fp_ext", bfp_ext, nelms, error, scale=ext_field_ramp_data(ntime))
+     else
+        call write_field(group_id, "psi_ext", psi_ext, nelms, error)
+        call write_field(group_id, "I_ext", bz_ext, nelms, error)    
+        call write_field(group_id, "f_ext", bf_ext, nelms, error)
+        call write_field(group_id, "fp_ext", bfp_ext, nelms, error)
+     end if
   endif
 
   if(ikprad.ne.0) then
