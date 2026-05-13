@@ -718,6 +718,7 @@ subroutine nre_eq
      endif
   end do
   call mpi_allreduce(bzsign_temp, bzsign, 1, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
+  bzsign=sign(1.0, bzsign)
 
   call newvar_solve(nre_vec%vec,mass_mat_lhs)
   nre_field(0) = nre_vec

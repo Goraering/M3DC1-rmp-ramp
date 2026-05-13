@@ -584,10 +584,6 @@ subroutine set_defaults
   call add_var_int("irmp", irmp, 0, &
        "1: Apply nonaxisym. fields throughout plasma|&
        &2: Apply mpol/ntor vacuum fields (itor=0 only)", eq_grp)
-  call add_var_int("irmp_inc_start", irmp_inc_start, -1, &
-        "Timestep up to which external field is 0", eq_grp)
-  call add_var_int("irmp_inc_end",irmp_inc_end,0,&
-        "Timestep at which external field reaches 1.0* input field", eq_grp)
   call add_var_double("rmp_atten", rmp_atten, 0., &
        "Additional exponential decay of RMP field from r=1 for irmp=2", eq_grp)
   call add_var_double("tf_tilt", tf_tilt, 0., &
@@ -615,6 +611,8 @@ subroutine set_defaults
        "Factor to down-sample external field data poloidally", eq_grp)
   call add_var_double("scale_ext_field", scale_ext_field, 1., &
        "Factor to scale external field", eq_grp)
+  call add_var_int("iuse_ext_field_ramp", iuse_ext_field_ramp, 0, &
+       "1: Scale external field dynamically", eq_grp)
   call add_var_double_array("shift_ext_field", shift_ext_field, 8, 0., &
        "Toroidal shift (in deg) of external fields", eq_grp)
   call add_var_int("type_ext_field",type_ext_field,-1,&
