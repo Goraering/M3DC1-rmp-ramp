@@ -1455,6 +1455,9 @@ int matrix_solve::setKspType() {
       ierr = KSPSetOptionsPrefix(_ksp, "hard_");
       ierr = MatViewFromOptions(_A, NULL, "-A_view");
     }
+	if (mymatrix_id == 6) {
+		ierr = KSPSetOptionsPrefix(_ksp, "hardfield_"); 
+	}
   }
 
   ierr = KSPSetFromOptions(_ksp);
