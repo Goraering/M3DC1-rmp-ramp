@@ -89,25 +89,7 @@ contains
     call MPI_Comm_rank(MPI_COMM_WORLD,myrank,ier)
 
     ! Define boundary types and zone types
-    if(imulti_region.eq.1) then
-       if(boundary_type(1).eq.BOUND_UNKNOWN) then
-          if(myrank.eq.0) &
-               print *, "Boundary types not specified.  Using defaults."
-          boundary_type(1) = BOUND_FIRSTWALL
-          boundary_type(2) = BOUND_FIRSTWALL
-          boundary_type(5) = BOUND_DOMAIN
-          boundary_type(6) = BOUND_DOMAIN
-       end if
-
-       if(zone_type(1).eq.ZONE_UNKNOWN) then
-          if(myrank.eq.0) &
-               print *, "Zone types not specified.  Using defaults."
-          zone_type(1) = ZONE_PLASMA
-          zone_type(2) = ZONE_CONDUCTOR
-          zone_type(3) = ZONE_VACUUM
-       end if
-
-    else
+    if(imulti_region.eq.0) then
        boundary_type(1) = BOUND_ANY
 
        zone_type(1) = ZONE_PLASMA
@@ -268,6 +250,58 @@ contains
        end do
     end if
 #endif
+
+    ! Do some sanity checks
+    ier = 0
+    if(boundary_type(1).eq.BOUND_UNKNOWN) then
+       if(myrank.eq.0) &
+            print *, 'Error: boundary_type(1) is not set'
+       ier = 1
+    end if
+    if(.not.any(boundary_type(:).eq.BOUND_DOMAIN) .and. &
+         .not.any(boundary_type(:).eq.BOUND_ANY)) then
+       if(myrank.eq.0) &
+            print *, 'Error: no boundary is identified as the domain boundary'
+       ier = 1
+    end if
+    if(zone_type(1).eq.ZONE_UNKNOWN) then
+       if(myrank.eq.0) &
+            print *, 'Error: zone_type(1) is not set'
+       ier = 1
+    end if
+
+    if(ier.ne.0) then
+       if(myrank.eq.0) then
+          print *, '================================================================='
+          print *, 'ERROR: Default boundary_type and zone_type are no longer assigned'
+          print *, '       for imulti_region=1.  Please assign these manually'
+          print *, ''
+          print *, 'boundary_type(i) = '
+          print *, '   First wall:      ', BOUND_FIRSTWALL
+          print *, '   Domain:          ', BOUND_DOMAIN
+          print *, '   Other (default): ', BOUND_UNKNOWN
+          print *, ''
+          print *, 'zone_type(i) = '
+          print *, '   Plasma:    ', ZONE_PLASMA
+          print *, '   Conductor: ', ZONE_CONDUCTOR
+          print *, '   Vacuum:    ', ZONE_VACUUM
+          print *, ''
+          print *, ''
+          print *, 'For imulti_region=1 cases using meshes from m3dc1_meshgen,'
+          print *, 'insert the following into C1input: '
+          print *, ''
+          print *, '        boundary_type(1) = 1  ! First wall'
+          print *, '        boundary_type(2) = 1  ! First wall'
+          print *, '        boundary_type(5) = 2  ! Domain boundary'
+          print *, '        boundary_type(6) = 2  ! Domain boundary'
+          print *, ''
+          print *, '        zone_type(1) = 1   ! Plasma'
+          print *, '        zone_type(2) = 2   ! Conductor'
+          print *, '        zone_type(3) = 3   ! Vacuum'
+          print *, '================================================================='
+       end if
+       call safestop(188)
+    end if
 
     initialized = .true.
   end subroutine load_mesh
