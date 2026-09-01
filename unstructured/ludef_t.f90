@@ -3535,8 +3535,10 @@ subroutine coil_current_time_factors(theta, scale_new, scale_old, scale_weight, 
      scale_old = ext_field_ramp_data(max(0,ntime-1))
   end if
 
-  ! Contractions from inserting the prescribed ramped coil field into the
-  ! existing S(new)-D(old) time-step matrices.
+  ! theta is the magnetic-field coupling weight used by the calling equation,
+  ! not a separate time integrator for the prescribed ramp.  It is thimp for
+  ! a coupled field row and zero when a split pressure row uses the old field.
+  ! Insert a(t)*Jcoil with that same S(new)-D(old) weighting.
   scale_weight = theta*scale_new + (1.-theta*bdf)*scale_old
   scale_difference = scale_new - bdf*scale_old
 end subroutine coil_current_time_factors
@@ -5014,7 +5016,7 @@ subroutine temperature_lin(trialx, lin, ssterm, ddterm, q_ni, r_bf, q_bf,&
 end subroutine temperature_lin
 
 
-subroutine pressure_nolin(trialx, r4term, total_pressure, ohmic_equation, theta_f)
+subroutine pressure_nolin(trialx, r4term, total_pressure, theta_f)
 
   use basic
   use m3dc1_nint
@@ -5025,11 +5027,11 @@ subroutine pressure_nolin(trialx, r4term, total_pressure, ohmic_equation, theta_
   vectype, intent(in), dimension(dofs_per_element, MAX_PTS, OP_NUM) :: trialx
   vectype, intent(out), dimension(dofs_per_element) :: r4term
   logical, intent(in) :: total_pressure
-  logical, intent(in) :: ohmic_equation
   real, intent(in) :: theta_f
 
   vectype, dimension(MAX_PTS, OP_NUM) :: pp079, nn079, nn179, siw79
   vectype, dimension(dofs_per_element) :: qcoil
+  logical :: include_coil_ohmic
 
   if(itemp.eq.0) then
      if(total_pressure) then
@@ -5062,7 +5064,13 @@ subroutine pressure_nolin(trialx, r4term, total_pressure, ohmic_equation, theta_
   
   r4term = 0.
 
-  if(ohmic_equation .and. iohmic_heating.eq.1) then
+  ! Match the Q_Ohm row selection in pressure_lin/temperature_lin.  Both
+  ! pressure equations contain Ohmic heating.  For temperature equations,
+  ! total/electron temperature contains it while ion temperature does not.
+  include_coil_ohmic = itemp.eq.0 .or. &
+       (ipres.eq.0 .and. numvar.ge.3) .or. &
+       (ipres.eq.1 .and. numvar.lt.3) .or. .not.total_pressure
+  if(include_coil_ohmic .and. iohmic_heating.eq.1) then
      call coil_current_ohmic_source(trialx,qcoil,theta_f)
      r4term = r4term + qcoil
   end if
@@ -5956,7 +5964,7 @@ subroutine ludefphi_n(itri)
         end if
      else if(ieq(k).eq.ppe_i .and. ipressplit.eq.0 .and. numvar.ge.3) then
         if(izone.eq.ZONE_PLASMA) &
-             call pressure_nolin(mu79,q4,ipres.eq.0,.true.,thimp)
+             call pressure_nolin(mu79,q4,ipres.eq.0,thimp)
      else if(ieq(k).eq.bf_i .and. imp_bf.eq.1) then
         call bf_equation_nolin(mu79,q4)
      end if
@@ -6199,15 +6207,14 @@ subroutine ludefpres_n(itri)
 
      if(izone.eq.ZONE_PLASMA) then
         if(ipressplit.eq.0) then
-           call pressure_nolin(mu79,q4,.true.,.true.,thimpf)
+           call pressure_nolin(mu79,q4,.true.,thimpf)
         endif
         if(ipressplit.eq.1) then
            if(imode.eq.1 .or. (imode.eq.3 .and. k.eq.1) &
                 .or. (imode.eq.4 .and. k.eq.2))  then
-              call pressure_nolin(mu79,q4,.true., &
-                   .not.(imode.eq.4 .and. k.eq.2),thimpf)
+              call pressure_nolin(mu79,q4,.true.,thimpf)
            else
-              call pressure_nolin(mu79,q4,.false.,.true.,thimpf)
+              call pressure_nolin(mu79,q4,.false.,thimpf)
            endif
         end if
      endif  ! ipressplit
