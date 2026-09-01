@@ -22,12 +22,14 @@ contains
 
     include 'mpif.h'
 
-    integer :: error
+    integer :: error, attr_error
     integer(HID_T) :: root_id, scalar_group_id, time_id, eq_time_id, pel_group_id, mesh_id
     character(LEN=19) :: time_group_name
 
     integer :: times_output_in, i3d_in, istartnew, i
     real :: xnullt,znullt,xnull2t,znull2t
+    real :: ramp_scale_saved, ramp_scale_current, ramp_scale_tolerance
+    logical :: ramp_scale_present
 
     call h5gopen_f(file_id, "/", root_id, error)
 
@@ -62,6 +64,25 @@ contains
     write(time_group_name, '("time_",I3.3)') times_output
     call h5gopen_f(root_id, time_group_name, time_id, error)
     call read_int_attr(time_id, "ntimestep", ntime, error)
+
+    ramp_scale_present = .false.
+    if(irmp.eq.0 .and. iread_ext_field.gt.0 .and. &
+         iuse_ext_field_ramp.eq.1) then
+       if(ntime.gt.ntimemax) then
+          if(myrank.eq.0) print *, &
+               'Error: restart timestep exceeds ntimemax for external ramp: ', &
+               ntime, ntimemax
+          call safestop(1)
+       end if
+       attr_error = 0
+       call h5aexists_f(time_id, "ext_field_ramp_scale", &
+            ramp_scale_present, attr_error)
+       if(attr_error.eq.0 .and. ramp_scale_present) then
+          call read_real_attr(time_id, "ext_field_ramp_scale", &
+               ramp_scale_saved, attr_error)
+       end if
+       if(attr_error.ne.0) ramp_scale_present = .false.
+    end if
 
 
     ! Read Attributes
@@ -272,6 +293,28 @@ contains
 
     call read_fields(time_id, 0, error)
 
+    if(irmp.eq.0 .and. iread_ext_field.gt.0 .and. &
+         iuse_ext_field_ramp.eq.1 .and. extsubtract_in.eq.1) then
+       ramp_scale_current = ext_field_ramp_data(ntime)
+       if(ramp_scale_present) then
+          ramp_scale_tolerance = 1.e-12*max(1.,abs(ramp_scale_saved), &
+               abs(ramp_scale_current))
+          if(abs(ramp_scale_current-ramp_scale_saved).gt. &
+               ramp_scale_tolerance) then
+             if(myrank.eq.0) print *, &
+                  'Error: external ramp scale at restart differs from ', &
+                  'the saved scale at timestep ', ntime, ': ', &
+                  ramp_scale_current, ramp_scale_saved
+             call safestop(1)
+          end if
+       else if(myrank.eq.0) then
+          print *, 'Warning: restart has no saved external ramp scale; ', &
+               'continuity cannot be verified'
+          print *, 'The ext_field_scale value at the restart timestep ', &
+               'must match the original run'
+       end if
+    end if
+
     call h5gclose_f(time_id, error)
 
     ! Read Equilibrium Fields
@@ -433,14 +476,35 @@ contains
        end if
     end if
 
-    if (extsubtract_in.eq.1) then
-       if (iuse_ext_field_ramp .eq. 1) then
-          if (myrank.eq.0 .and. iprint.ge.1) print *, 'Recalculating external fields (iuse_ext_field_ramp=1)'
-          call rmp_per(1)
-       else
+    if(extsubtract.eq.1) then
+       if(iuse_ext_field_ramp.eq.1) then
+          ! The reference basis is shared by the equilibrium and evolved
+          ! fields, so initialize it only while reading the evolved fields.
+          if(ilin.eq.1 .or. eqsubtract_in.eq.0) then
+             ! Ramped output contains the field at the saved time, whereas the
+             ! evolution and source paths require the unscaled reference basis.
+             ! Use the current input setting here: a restart without a previous
+             ! external-subtracted field must also initialize the new ramp path.
+             if(myrank.eq.0 .and. iprint.ge.1) print *, &
+                  'Recalculating external fields (iuse_ext_field_ramp=1)'
+             call rmp_per(1)
+             if(extsubtract_in.eq.0 .and. &
+                  abs(ext_field_ramp_data(ntime)).gt.1.e-12) then
+                if(myrank.eq.0) print *, &
+                     'Error: starting a ramped external field from a restart ', &
+                     'without external subtraction requires zero scale at ', &
+                     'the restart time step'
+                call safestop(1)
+             else if(extsubtract_in.eq.0 .and. myrank.eq.0) then
+                print *, 'Warning: treating restart magnetic fields as the ', &
+                     'external-subtracted response; the restart must not ', &
+                     'already contain this prescribed external field'
+             end if
+          end if
+       else if(extsubtract_in.eq.1) then
           call h5r_read_field(group_id, "psi_ext", psi_ext, nelms, error)
           call h5r_read_field(group_id,   "I_ext",  bz_ext, nelms, error)
-          call h5r_read_field(group_id,   "f_ext",  bf_ext, nelms, error)       
+          call h5r_read_field(group_id,   "f_ext",  bf_ext, nelms, error)
           if(irestart_fp.eq.1) then
              call h5r_read_field(group_id, "fp_ext", bfp_ext, nelms, error)
           end if

@@ -587,6 +587,7 @@ subroutine vorticity_nolin(trialx, r4term)
 
   vectype, intent(in), dimension(dofs_per_element, MAX_PTS, OP_NUM) :: trialx
   vectype, intent(out), dimension(dofs_per_element) :: r4term
+  vectype, dimension(dofs_per_element) :: qcoil
 
   r4term = 0.
 
@@ -608,6 +609,9 @@ subroutine vorticity_nolin(trialx, r4term)
              +v1bf  (trialx,bzx79,bfp079))
      end if
   end if
+
+  call coil_current_lorentz_source(trialx,1,qcoil)
+  r4term = r4term + qcoil
 
 #ifdef USEPARTICLES
   ! kinetic terms
@@ -1163,6 +1167,7 @@ subroutine axial_vel_nolin(trialx, r4term)
 
   vectype, intent(in), dimension(dofs_per_element, MAX_PTS, OP_NUM) :: trialx
   vectype, intent(out), dimension(dofs_per_element) :: r4term
+  vectype, dimension(dofs_per_element) :: qcoil
   
   r4term = 0.
 
@@ -1183,6 +1188,9 @@ subroutine axial_vel_nolin(trialx, r4term)
              +v2ff   (trialx,bfp079,bfpx79))
      end if
   end if
+
+  call coil_current_lorentz_source(trialx,2,qcoil)
+  r4term = r4term + qcoil
 
 #ifdef USEPARTICLES
   ! kinetic terms
@@ -1801,6 +1809,7 @@ subroutine compression_nolin(trialx, r4term)
 
   vectype, intent(in), dimension(dofs_per_element, MAX_PTS, OP_NUM) :: trialx
   vectype, intent(out), dimension(dofs_per_element) :: r4term
+  vectype, dimension(dofs_per_element) :: qcoil
 
   r4term = 0.
 
@@ -1829,6 +1838,9 @@ subroutine compression_nolin(trialx, r4term)
              +v3bf  (trialx,bzx79,bfp079))
      end if
   endif
+
+  call coil_current_lorentz_source(trialx,3,qcoil)
+  r4term = r4term + qcoil
 
 
 #ifdef USEPARTICLES
@@ -3433,6 +3445,402 @@ end subroutine axial_field_nolin
 
 
 !======================================================================
+! Faraday sources for a ramped, volume-added read external field.
+!
+! The evolved magnetic unknown is the response field while define_fields
+! adds a(t)*Bext algebraically to the physical field.  Therefore
+!
+!   d(Bresponse + a*Bext)/dt = RHS
+!
+! requires -Delta(a)*Bext on the response-field RHS.  M3D-C1's vacuum
+! zone is the quasi-static eta*J=0 equation and has no magnetic time mass;
+! only plasma and conductor elements receive these sources.  The read
+! field is a current-free vacuum field in the computational domain, so the
+! electron-inertia current derivative is deliberately not applied to it.
+!======================================================================
+subroutine read_external_ramp_flux_source(trialx, r4term, izone)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  integer, intent(in) :: izone
+  real :: scale_difference
+
+  r4term = 0.
+  if(irmp.ne.0 .or. iread_ext_field.le.0 .or. .not.iramp_data) return
+  if(izone.ne.ZONE_PLASMA .and. izone.ne.ZONE_CONDUCTOR) return
+
+  scale_difference = ext_field_ramp_data(ntime) - &
+       ext_field_ramp_data(max(0,ntime-1))
+  if(scale_difference.eq.0.) return
+
+  r4term = -scale_difference*b1psi(trialx,pscoil79)
+end subroutine read_external_ramp_flux_source
+
+
+! Here "toroidal field" is the solver's bz/F unknown, F=R*B_phi.  It is
+! called the axial field in cylindrical-geometry parts of the legacy code;
+! it is not the vertical B_Z component of a tokamak equilibrium.
+subroutine read_external_ramp_toroidal_field_source(trialx, r4term, izone)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  integer, intent(in) :: izone
+  real :: scale_difference
+
+  r4term = 0.
+  if(irmp.ne.0 .or. iread_ext_field.le.0 .or. .not.iramp_data) return
+  if(izone.ne.ZONE_PLASMA .and. izone.ne.ZONE_CONDUCTOR) return
+
+  scale_difference = ext_field_ramp_data(ntime) - &
+       ext_field_ramp_data(max(0,ntime-1))
+  if(scale_difference.eq.0.) return
+
+  r4term = -scale_difference*b2b(trialx,bzcoil79)
+end subroutine read_external_ramp_toroidal_field_source
+
+
+!======================================================================
+! Localized impressed-current sources for irmp=3.
+!
+! The projected window-pane reference field is not added to the physical
+! field.  The magnetic equations instead use Jplasma=J-Jcoil in both
+! vacuum and plasma.  In plasma the same current is used in the Hall,
+! electron-inertia, Lorentz-force, Ohmic-heating, and electron-pressure
+! current-advection terms.  The metric terms retain db and mass_ratio, so
+! those contributions vanish naturally when their coefficients are zero.
+!======================================================================
+subroutine coil_current_time_factors(theta, scale_new, scale_old, scale_weight, &
+     scale_difference)
+  use basic
+
+  implicit none
+
+  real, intent(in) :: theta
+  real, intent(out) :: scale_new, scale_old, scale_weight, scale_difference
+
+  scale_new = 1.
+  scale_old = 1.
+  if(iramp_data) then
+     scale_new = ext_field_ramp_data(ntime)
+     scale_old = ext_field_ramp_data(max(0,ntime-1))
+  end if
+
+  ! Contractions from inserting the prescribed ramped coil field into the
+  ! existing S(new)-D(old) time-step matrices.
+  scale_weight = theta*scale_new + (1.-theta*bdf)*scale_old
+  scale_difference = scale_new - bdf*scale_old
+end subroutine coil_current_time_factors
+
+
+subroutine coil_current_components(scale, jcr, jcphi, jcz)
+  use basic
+  use m3dc1_nint
+
+  implicit none
+
+  real, intent(in) :: scale
+  vectype, intent(out), dimension(MAX_PTS) :: jcr, jcphi, jcz
+
+  jcr = -ri_79*bzcoil79(:,OP_DZ)
+  jcz =  ri_79*bzcoil79(:,OP_DR)
+  jcphi = -ri_79*pscoil79(:,OP_GS)
+
+#if defined(USE3D) || defined(USECOMPLEX)
+  if(i3d.eq.1) then
+     jcr = jcr - ri_79*bfpcoil79(:,OP_DZP) &
+          + ri2_79*pscoil79(:,OP_DRP)
+     jcz = jcz + ri_79*bfpcoil79(:,OP_DRP) &
+          + ri2_79*pscoil79(:,OP_DZP)
+  end if
+#endif
+
+  jcr = scale*jcr
+  jcphi = scale*jcphi
+  jcz = scale*jcz
+end subroutine coil_current_components
+
+
+subroutine total_current_components(jr_f, jphi_f, jz_f, jr_bf, jphi_bf, jz_bf)
+  use basic
+  use m3dc1_nint
+
+  implicit none
+
+  vectype, intent(out), dimension(MAX_PTS) :: jr_f, jphi_f, jz_f
+  vectype, intent(out), dimension(MAX_PTS) :: jr_bf, jphi_bf, jz_bf
+
+  jr_f = -ri_79*bzt79(:,OP_DZ)
+  jz_f =  ri_79*bzt79(:,OP_DR)
+  jphi_f = -ri_79*pst79(:,OP_GS)
+  jr_bf = 0.
+  jphi_bf = 0.
+  jz_bf = 0.
+
+#if defined(USE3D) || defined(USECOMPLEX)
+  if(i3d.eq.1) then
+     jr_f = jr_f + ri2_79*pst79(:,OP_DRP)
+     jz_f = jz_f + ri2_79*pst79(:,OP_DZP)
+     jr_bf = -ri_79*bfpt79(:,OP_DZP)
+     jz_bf =  ri_79*bfpt79(:,OP_DRP)
+  end if
+#endif
+end subroutine total_current_components
+
+
+subroutine total_magnetic_field_components(br, bphi, bz)
+  use basic
+  use m3dc1_nint
+
+  implicit none
+
+  vectype, intent(out), dimension(MAX_PTS) :: br, bphi, bz
+
+  br = -ri_79*pst79(:,OP_DZ)
+  bz =  ri_79*pst79(:,OP_DR)
+  bphi = ri_79*bzt79(:,OP_1)
+
+#if defined(USE3D) || defined(USECOMPLEX)
+  if(i3d.eq.1) then
+     br = br - bfpt79(:,OP_DR)
+     bz = bz - bfpt79(:,OP_DZ)
+  end if
+#endif
+end subroutine total_magnetic_field_components
+
+
+subroutine coil_current_lorentz_source(trialx, component, r4term)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  integer, intent(in) :: component
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  vectype, dimension(MAX_PTS) :: jcr, jcphi, jcz
+  vectype, dimension(MAX_PTS) :: br, bphi, bz, fr, fphi, fz
+  real :: scale_new, scale_old, source_weight, scale_difference
+
+  r4term = 0.
+  if(irmp.ne.3) return
+
+  call coil_current_time_factors(thimp, scale_new, scale_old, source_weight, &
+       scale_difference)
+  call coil_current_components(source_weight, jcr, jcphi, jcz)
+  call total_magnetic_field_components(br, bphi, bz)
+
+  ! The force on the fluid uses Jplasma x B = (J-Jcoil) x B.
+  fr = -(jcphi*bz - jcz*bphi)
+  fphi = -(jcz*br - jcr*bz)
+  fz = -(jcr*bphi - jcphi*br)
+
+  select case(component)
+  case(1) ! -mu grad(phi).curl(R^2 F)
+     r4term = -dt*(intx3(trialx(:,:,OP_DZ),r_79,fr) &
+          - intx3(trialx(:,:,OP_DR),r_79,fz))
+  case(2) ! R^2 mu grad(phi).F
+     r4term = dt*intx3(trialx(:,:,OP_1),r_79,fphi)
+  case(3) ! mu div_p(R^-2 F)
+     r4term = -dt*(intx3(trialx(:,:,OP_DR),ri2_79,fr) &
+          + intx3(trialx(:,:,OP_DZ),ri2_79,fz))
+  end select
+end subroutine coil_current_lorentz_source
+
+
+subroutine coil_current_ohmic_source(trialx, r4term, theta_f)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  real, intent(in) :: theta_f
+  vectype, dimension(MAX_PTS) :: jcr, jcphi, jcz, jdot
+  vectype, dimension(MAX_PTS) :: jr_f, jphi_f, jz_f
+  vectype, dimension(MAX_PTS) :: jr_bf, jphi_bf, jz_bf
+  real :: theta_bf, scale_new, scale_old
+  real :: source_weight, source_weight_bf, scale_difference
+
+  r4term = 0.
+  if(irmp.ne.3) return
+
+  call coil_current_time_factors(theta_f, scale_new, scale_old, source_weight, &
+       scale_difference)
+  theta_bf = 0.
+  if(imp_bf.eq.1) theta_bf = theta_f
+  source_weight_bf = theta_bf*scale_new + &
+       (1.-theta_bf*bdf)*scale_old
+
+  call coil_current_components(1., jcr, jcphi, jcz)
+  call total_current_components(jr_f, jphi_f, jz_f, &
+       jr_bf, jphi_bf, jz_bf)
+  jdot = source_weight*(jr_f*jcr + jphi_f*jcphi + jz_f*jcz) &
+       + source_weight_bf*(jr_bf*jcr + jphi_bf*jcphi + jz_bf*jcz)
+
+  ! M3D-C1 uses eta*J.(J-Jx); add Jcoil to the existing Jx=JRE term.
+  r4term = -dt*(gam-1.)* &
+       intx3(trialx(:,:,OP_1),eta79(:,OP_1),jdot)
+end subroutine coil_current_ohmic_source
+
+
+subroutine coil_current_pressure_twofluid_source(trialx, r4term, theta_f)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  real, intent(in) :: theta_f
+  vectype, dimension(dofs_per_element) :: temp, temp_bf
+  real :: theta_bf, scale_new, scale_old
+  real :: source_weight, source_weight_bf, scale_difference
+
+  r4term = 0.
+  if(irmp.ne.3) return
+
+#ifndef USEPARTICLES
+  call coil_current_time_factors(theta_f, scale_new, scale_old, source_weight, &
+       scale_difference)
+  theta_bf = 0.
+  if(imp_bf.eq.1) theta_bf = theta_f
+  source_weight_bf = theta_bf*scale_new + &
+       (1.-theta_bf*bdf)*scale_old
+
+  temp = b3pepsid(trialx,pet79,pscoil79,ni79)
+  if(numvar.ge.2) temp = temp + b3pebd(trialx,pet79,bzcoil79,ni79)
+  r4term = -db*dt*source_weight*temp
+#if defined(USE3D) || defined(USECOMPLEX)
+  if(i3d.eq.1 .and. numvar.ge.2) then
+     temp_bf = b3pefd(trialx,pet79,bfpcoil79,ni79)
+     r4term = r4term - db*dt*source_weight_bf*temp_bf
+  end if
+#endif
+#endif
+end subroutine coil_current_pressure_twofluid_source
+
+
+subroutine coil_current_flux_source(trialx, r4term, izone)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  integer, intent(in) :: izone
+  vectype, dimension(dofs_per_element) :: temp, temp_bf
+  real :: scale_new, scale_old, source_weight, source_weight_bf, thimp_bf
+  real :: scale_difference
+
+  r4term = 0.
+  if(irmp.ne.3) return
+
+  call coil_current_time_factors(thimp, scale_new, scale_old, source_weight, &
+       scale_difference)
+  thimp_bf = 0.
+  if(imp_bf.eq.1) thimp_bf = thimp
+  source_weight_bf = thimp_bf*scale_new + &
+       (1.-thimp_bf*bdf)*scale_old
+
+  temp = b1psieta1(trialx,pscoil79,eta79,vzt79,eta_mod.eq.1) &
+       + b1psieta2(trialx,pscoil79,eta79,vzt79,eta_mod.eq.1)
+  if(numvar.ge.2) temp = temp + b1beta(trialx,bzcoil79,eta79)
+
+  r4term = -dt*source_weight*temp
+  if(i3d.eq.1 .and. numvar.ge.2) then
+     temp_bf = b1feta(trialx,bfpcoil79,eta79)
+     r4term = r4term - dt*source_weight_bf*temp_bf
+  end if
+
+  if(izone.eq.ZONE_PLASMA) then
+     ! Electron inertia: b1psid includes mass_ratio*db**2.
+     r4term = r4term - scale_difference* &
+          b1psid(trialx,pscoil79,ni79)
+
+     ! Hall correction: replace J by J-Jcoil in (J x B)/(ne).
+     temp = b1psipsid(trialx,pst79,pscoil79,ni79) &
+          + b1psibd1(trialx,pst79,bzcoil79,ni79) &
+          + b1psibd2(trialx,pscoil79,bzt79,ni79) &
+          + b1bbd(trialx,bzcoil79,bzt79,ni79)
+#if defined(USE3D) || defined(USECOMPLEX)
+     if(i3d.eq.1 .and. numvar.ge.2) temp = temp &
+          + b1psifd1(trialx,pscoil79,bfpt79,ni79) &
+          + b1psifd2(trialx,pst79,bfpcoil79,ni79) &
+          + b1bfd1(trialx,bzcoil79,bfpt79,ni79) &
+          + b1bfd2(trialx,bzt79,bfpcoil79,ni79)
+#endif
+     r4term = r4term - db*dt*source_weight*temp
+  end if
+end subroutine coil_current_flux_source
+
+
+subroutine coil_current_axial_source(trialx, r4term, izone)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  integer, intent(in) :: izone
+  vectype, dimension(dofs_per_element) :: temp, temp_bf
+  real :: scale_new, scale_old, source_weight, source_weight_bf, thimp_bf
+  real :: scale_difference
+
+  r4term = 0.
+  if(irmp.ne.3 .or. numvar.lt.2) return
+
+  call coil_current_time_factors(thimp, scale_new, scale_old, source_weight, &
+       scale_difference)
+  thimp_bf = 0.
+  if(imp_bf.eq.1) thimp_bf = thimp
+  source_weight_bf = thimp_bf*scale_new + &
+       (1.-thimp_bf*bdf)*scale_old
+
+  temp = b2psieta(trialx,pscoil79,eta79) &
+       + b2beta(trialx,bzcoil79,eta79,vzt79)
+
+  r4term = -dt*source_weight*temp
+  if(i3d.eq.1) then
+     temp_bf = b2feta(trialx,bfpcoil79,eta79)
+     r4term = r4term - dt*source_weight_bf*temp_bf
+  end if
+
+  if(izone.eq.ZONE_PLASMA) then
+     r4term = r4term - scale_difference* &
+          b2bd(trialx,bzcoil79,ni79)
+
+     temp = b2psipsid(trialx,pscoil79,pst79,ni79) &
+          + b2psibd(trialx,pscoil79,bzt79,ni79) &
+          + b2bbd(trialx,bzcoil79,bzt79,ni79)
+#if defined(USE3D) || defined(USECOMPLEX)
+     if(i3d.eq.1) temp = temp &
+          + b2psifd(trialx,pscoil79,bfpt79,ni79) &
+          + b2bfd(trialx,bzt79,bfpcoil79,ni79)
+#endif
+     r4term = r4term - db*dt*source_weight*temp
+  end if
+end subroutine coil_current_axial_source
+
+
+!======================================================================
 ! Pressure Equation
 !======================================================================
 subroutine pressure_lin(trialx, lin, ssterm, ddterm, q_ni, r_bf, q_bf,&
@@ -4606,7 +5014,7 @@ subroutine temperature_lin(trialx, lin, ssterm, ddterm, q_ni, r_bf, q_bf,&
 end subroutine temperature_lin
 
 
-subroutine pressure_nolin(trialx, r4term, total_pressure)
+subroutine pressure_nolin(trialx, r4term, total_pressure, ohmic_equation, theta_f)
 
   use basic
   use m3dc1_nint
@@ -4617,8 +5025,11 @@ subroutine pressure_nolin(trialx, r4term, total_pressure)
   vectype, intent(in), dimension(dofs_per_element, MAX_PTS, OP_NUM) :: trialx
   vectype, intent(out), dimension(dofs_per_element) :: r4term
   logical, intent(in) :: total_pressure
+  logical, intent(in) :: ohmic_equation
+  real, intent(in) :: theta_f
 
   vectype, dimension(MAX_PTS, OP_NUM) :: pp079, nn079, nn179, siw79
+  vectype, dimension(dofs_per_element) :: qcoil
 
   if(itemp.eq.0) then
      if(total_pressure) then
@@ -4650,6 +5061,13 @@ subroutine pressure_nolin(trialx, r4term, total_pressure)
   endif
   
   r4term = 0.
+
+  if(ohmic_equation .and. iohmic_heating.eq.1) then
+     call coil_current_ohmic_source(trialx,qcoil,theta_f)
+     r4term = r4term + qcoil
+  end if
+  call coil_current_pressure_twofluid_source(trialx,qcoil,theta_f)
+  r4term = r4term + qcoil
 
   ! Contribution from external fields
   if(use_external_fields .and. (eqsubtract.eq.1 .or. icsubtract.eq.1)) then
@@ -5379,7 +5797,7 @@ subroutine ludefphi_n(itri)
   
   vectype, dimension(dofs_per_element,dofs_per_element,num_fields) :: ss, dd
   vectype, dimension(dofs_per_element,dofs_per_element) :: r_bf, q_bf
-  vectype, dimension(dofs_per_element) :: q4
+  vectype, dimension(dofs_per_element) :: q4, qsource
   vectype, dimension(dofs_per_element,dofs_per_element,2) :: q_ni
 
   type(matrix_type), pointer :: bb1, bb0, bv1, bv0, bf0, bf1, bn1, bn0, &
@@ -5514,10 +5932,31 @@ subroutine ludefphi_n(itri)
 
      if(ieq(k).eq.psi_i) then
         if(izone.eq.ZONE_PLASMA) call flux_nolin(mu79,q4)
+        if(irmp.eq.0 .and. iread_ext_field.gt.0 .and. iramp_data .and. &
+             (izone.eq.ZONE_PLASMA .or. izone.eq.ZONE_CONDUCTOR)) then
+           call read_external_ramp_flux_source(mu79,qsource,izone)
+           q4 = q4 + qsource
+        end if
+        if(irmp.eq.3 .and. (izone.eq.ZONE_PLASMA .or. &
+             izone.eq.ZONE_VACUUM)) then
+           call coil_current_flux_source(mu79,qsource,izone)
+           q4 = q4 + qsource
+        end if
      else if(ieq(k).eq.bz_i .and. numvar.ge.2) then
         if(izone.eq.ZONE_PLASMA) call axial_field_nolin(mu79,q4)
+        if(irmp.eq.0 .and. iread_ext_field.gt.0 .and. iramp_data .and. &
+             (izone.eq.ZONE_PLASMA .or. izone.eq.ZONE_CONDUCTOR)) then
+           call read_external_ramp_toroidal_field_source(mu79,qsource,izone)
+           q4 = q4 + qsource
+        end if
+        if(irmp.eq.3 .and. (izone.eq.ZONE_PLASMA .or. &
+             izone.eq.ZONE_VACUUM)) then
+           call coil_current_axial_source(mu79,qsource,izone)
+           q4 = q4 + qsource
+        end if
      else if(ieq(k).eq.ppe_i .and. ipressplit.eq.0 .and. numvar.ge.3) then
-        if(izone.eq.ZONE_PLASMA) call pressure_nolin(mu79,q4,ipres.eq.0)
+        if(izone.eq.ZONE_PLASMA) &
+             call pressure_nolin(mu79,q4,ipres.eq.0,.true.,thimp)
      else if(ieq(k).eq.bf_i .and. imp_bf.eq.1) then
         call bf_equation_nolin(mu79,q4)
      end if
@@ -5760,14 +6199,15 @@ subroutine ludefpres_n(itri)
 
      if(izone.eq.ZONE_PLASMA) then
         if(ipressplit.eq.0) then
-           call pressure_nolin(mu79,q4,.true.)
+           call pressure_nolin(mu79,q4,.true.,.true.,thimpf)
         endif
         if(ipressplit.eq.1) then
            if(imode.eq.1 .or. (imode.eq.3 .and. k.eq.1) &
                 .or. (imode.eq.4 .and. k.eq.2))  then
-              call pressure_nolin(mu79,q4,.true.)
+              call pressure_nolin(mu79,q4,.true., &
+                   .not.(imode.eq.4 .and. k.eq.2),thimpf)
            else
-              call pressure_nolin(mu79,q4,.false.)
+              call pressure_nolin(mu79,q4,.false.,.true.,thimpf)
            endif
         end if
      endif  ! ipressplit

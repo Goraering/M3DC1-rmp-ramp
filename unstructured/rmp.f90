@@ -1,6 +1,7 @@
 module rmp
 
   use coils
+  use basic, only: max_rmp_modes
   use read_schaffer_field
 
   implicit none
@@ -12,8 +13,10 @@ module rmp
   real :: rmp_atten
 
   real, dimension(maxfilaments), private :: xc_na, zc_na
-  complex, dimension(maxfilaments), private :: ic_na
+  complex, dimension(maxfilaments,max_rmp_modes), private :: ic_na
   integer, private :: nc_na
+  integer, private :: rmp_mode_count = 0
+  integer, dimension(max_rmp_modes), private :: rmp_mode_n = 0
   logical, private :: read_p
 
   type(schaffer_field), allocatable, private :: sf(:)
@@ -36,48 +39,82 @@ subroutine rmp_per(ilin)
   integer, intent(in), optional :: ilin
   integer :: it_read, last_it, nlines, i
   real :: scale_read, last_scale
-  integer, allocatable :: temp_time(:)
-  real, allocatable :: temp_scale(:)
+  real, allocatable :: temp_time(:), temp_scale(:)
 
-  if (iuse_ext_field_ramp .eq. 1) then
-     if(myrank.eq.0 .and. iprint.ge. 2) print *, 'Use external field scaling, reading ext_field_scale'     
+  if(iuse_ext_field_ramp.eq.1) then
+     if(myrank.eq.0 .and. iprint.ge.2) print *, &
+          'Use external field scaling, reading ext_field_scale'
 
-     if (.not. allocated(ext_field_ramp_data)) allocate(ext_field_ramp_data(0:ntimemax))
-     ext_field_ramp_data = 1.0
+     if(.not.allocated(ext_field_ramp_data)) &
+          allocate(ext_field_ramp_data(0:ntimemax))
+     ext_field_ramp_data = 1.
 
      nlines = 0
      call read_ascii_column('ext_field_scale', temp_time, nlines, icol=1)
-     
      nlines = 0
      call read_ascii_column('ext_field_scale', temp_scale, nlines, icol=2)
 
-     if(myrank.eq.0 .and. iprint.ge.2) print *, 'Done reading ext_field_scale, ', temp_scale
-     if (nlines > 0) then
-        last_scale = 1.0
+     if(nlines.gt.0) then
+        if(myrank.eq.0 .and. iprint.ge.2) print *, &
+             'Done reading ext_field_scale, ', temp_scale
+        ! Missing indices hold the preceding scale.  Indices before the
+        ! first explicit entry retain the default scale of one.
+        last_scale = 1.
         last_it = -1
-        do i = 1, nlines
-           it_read = temp_time(i)
+        do i=1,nlines
+           it_read = nint(temp_time(i))
            scale_read = temp_scale(i)
-           
-           if (it_read >= 0 .and. it_read <= ntimemax) then
-              if (last_it >= 0 .and. it_read > last_it + 1) then
-                 ext_field_ramp_data(last_it+1 : it_read-1) = last_scale
-              end if
-              ext_field_ramp_data(it_read) = scale_read
-              last_scale = scale_read
-              last_it = it_read
+           if(abs(temp_time(i)-real(it_read)).gt.1.e-6) then
+              if(myrank.eq.0) print *, &
+                   'Error: ext_field_scale time index must be an integer: ', &
+                   temp_time(i)
+              call safestop(1)
            end if
+           if(it_read.lt.0 .or. it_read.gt.ntimemax) then
+              if(myrank.eq.0) print *, &
+                   'Error: ext_field_scale time index is out of range: ', &
+                   it_read
+              call safestop(1)
+           end if
+           if(last_it.ge.0 .and. it_read.le.last_it) then
+              if(myrank.eq.0) print *, &
+                   'Error: ext_field_scale time indices must increase strictly: ', &
+                   last_it, it_read
+              call safestop(1)
+           end if
+           if(last_it.ge.0 .and. it_read.gt.last_it+1) &
+                ext_field_ramp_data(last_it+1:it_read-1) = last_scale
+           ext_field_ramp_data(it_read) = scale_read
+           last_scale = scale_read
+           last_it = it_read
         end do
-        if (last_it >= 0 .and. last_it < ntimemax) then
-           ext_field_ramp_data(last_it+1 : ntimemax) = last_scale
-        end if
-        
+        if(last_it.ge.0 .and. last_it.lt.ntimemax) &
+             ext_field_ramp_data(last_it+1:ntimemax) = last_scale
         deallocate(temp_time)
         deallocate(temp_scale)
      else
-        if(myrank.eq.0) print *, 'Warning: iuse_ext_field_ramp=1 but could not read ext_field_scale'
+        if(myrank.eq.0) print *, &
+             'Warning: iuse_ext_field_ramp=1 but could not read ext_field_scale'
      end if
      iramp_data = .true.
+     if(myrank.eq.0 .and. iprint.ge.1) print *, &
+          'External-field ramp, steps 0 through ', min(5,ntimemax), ': ', &
+          ext_field_ramp_data(0:min(5,ntimemax))
+     if(irmp.eq.3 .and. abs(ext_field_ramp_data(0)).gt.1.e-12 &
+          .and. myrank.eq.0) print *, &
+          'Warning: nonzero coil current at t=0 will be applied on the first solve'
+  end if
+
+  if(irmp.eq.4) then
+     if(iuse_ext_field_ramp.ne.1) then
+        if(myrank.eq.0) print *, &
+             'Error: irmp=4 requires iuse_ext_field_ramp=1'
+        call safestop(1)
+     else if(abs(ext_field_ramp_data(0)).gt.1.e-12) then
+        if(myrank.eq.0) print *, &
+             'Error: irmp=4 requires zero external field at time step 0'
+        call safestop(1)
+     end if
   end if
 
   if(type_ext_field.le.0) then ! RMP field
@@ -247,7 +284,7 @@ subroutine rmp_field(n, nt, np, x, phi, z, br, bphi, bz, p)
   vectype, intent(out), dimension(n) :: br, bphi, bz
   vectype, intent(out), dimension(n), optional :: p
 
-  integer :: i, j, ier
+  integer :: i, j, ier, irmp_mode, nmode
 
   complex, dimension(n) :: fr, fphi, fz
   complex, dimension(n) :: brv, bthetav, bzv, phase
@@ -275,39 +312,43 @@ subroutine rmp_field(n, nt, np, x, phi, z, br, bphi, bz, p)
   if(present(p)) p = 0.
 
   select case(irmp)
-  case(0)
+  case(0,4)
 
-  case(1)
-     fr   = 0.    ! B_R
-     fphi = 0.    ! B_phi
-     fz   = 0.    ! B_Z
-     
-     do i=1, nc_na, 2
-        call pane(ic_na(i),xc_na(i),xc_na(i+1),zc_na(i),zc_na(i+1), &
-             np,x,z,ntor,fr,fphi,fz)
-     end do
-     
+  case(1,3)
+     do irmp_mode=1,rmp_mode_count
+        nmode = rmp_mode_n(irmp_mode)
+        fr   = 0.    ! B_R complex amplitude for this toroidal harmonic
+        fphi = 0.    ! B_phi
+        fz   = 0.    ! B_Z
+
+        do i=1,nc_na,2
+           if(irmp.eq.3) then
+              call pane(ic_na(i,irmp_mode),xc_na(i),xc_na(i+1),zc_na(i), &
+                   zc_na(i+1),np,x,z,nmode,fr,fphi,fz,rmp_core_radius)
+           else
+              ! Preserve the historical globally softened volume-field mode.
+              call pane(ic_na(i,irmp_mode),xc_na(i),xc_na(i+1),zc_na(i), &
+                   zc_na(i+1),np,x,z,nmode,fr,fphi,fz)
+           end if
+        end do
+
 #ifdef USECOMPLEX
-     br = fr
-     bphi = fphi
-     bz = fz
+        br = br + fr
+        bphi = bphi + fphi
+        bz = bz + fz
 #else
-     do i=1, nt
-        co(1:np) = &
-             cos(ntor*phi((i-1)*np+1:i*np))
-        sn(1:np) = &
-             sin(ntor*phi((i-1)*np+1:i*np))
-        br((i-1)*np+1:i*np) = &
-             real(fr(1:np))*co(1:np) - &
-             aimag(fr(1:np))*sn(1:np)
-        bphi((i-1)*np+1:i*np) = &
-             real(fphi(1:np))*co(1:np) - &
-             aimag(fphi(1:np))*sn(1:np)
-        bz((i-1)*np+1:i*np) = &
-             real(fz(1:np))*co(1:np) - &
-             aimag(fz(1:np))*sn(1:np)
-     end do
+        do i=1,nt
+           co(1:np) = cos(nmode*phi((i-1)*np+1:i*np))
+           sn(1:np) = sin(nmode*phi((i-1)*np+1:i*np))
+           br((i-1)*np+1:i*np) = br((i-1)*np+1:i*np) + &
+                real(fr(1:np))*co(1:np) - aimag(fr(1:np))*sn(1:np)
+           bphi((i-1)*np+1:i*np) = bphi((i-1)*np+1:i*np) + &
+                real(fphi(1:np))*co(1:np) - aimag(fphi(1:np))*sn(1:np)
+           bz((i-1)*np+1:i*np) = bz((i-1)*np+1:i*np) + &
+                real(fz(1:np))*co(1:np) - aimag(fz(1:np))*sn(1:np)
+        end do
 #endif
+     end do
 
      br = -twopi*br
      bphi = -twopi*bphi
@@ -471,9 +512,10 @@ subroutine calculate_external_fields(ilin)
 
   type(matrix_type) :: br_mat, bf_mat
   type(vector_type) :: psi_vec, bz_vec, p_vec, bf_vec
-  integer :: i, itri, nelms, ier, ibound, ipsibound
+  integer :: i, itri, nelms, ier, ibound, ipsibound, irmp_mode
   integer, intent(in), optional :: ilin
   integer :: il
+  character(len=64) :: rmp_current_filename
 
   vectype, dimension(dofs_per_element,dofs_per_element,2,2) :: temp
   vectype, dimension(dofs_per_element,2) :: temp2
@@ -490,9 +532,40 @@ subroutine calculate_external_fields(ilin)
      il = ilin
   end if
 
-  if(irmp.eq.1) then
-     call load_coils(xc_na, zc_na, ic_na, nc_na, &
-          'rmp_coil.dat', 'rmp_current.dat')
+  if(irmp.eq.1 .or. irmp.eq.3) then
+     if(nrmp_modes.eq.0) then
+        rmp_mode_count = 1
+        rmp_mode_n(1) = ntor
+        call load_coils(xc_na, zc_na, ic_na(:,1), nc_na, &
+             'rmp_coil.dat', 'rmp_current.dat')
+     else
+        rmp_mode_count = nrmp_modes
+        rmp_mode_n(1:rmp_mode_count) = rmp_ntor_modes(1:rmp_mode_count)
+        do irmp_mode=1,rmp_mode_count
+           write(rmp_current_filename,'("rmp_current_n",I3.3,".dat")') &
+                rmp_mode_n(irmp_mode)
+           call load_coils(xc_na, zc_na, ic_na(:,irmp_mode), nc_na, &
+                'rmp_coil.dat', trim(rmp_current_filename))
+        end do
+     end if
+
+     if(mod(nc_na,2).ne.0) then
+        if(myrank.eq.0) print *, &
+             'Error: window-pane geometry must contain paired R,Z endpoints'
+        call safestop(301)
+     end if
+     do irmp_mode=1,rmp_mode_count
+        do i=1,nc_na,2
+           if(abs(ic_na(i+1,irmp_mode)+ic_na(i,irmp_mode)).gt. &
+                1.e-10+1.e-6*max(abs(ic_na(i,irmp_mode)), &
+                abs(ic_na(i+1,irmp_mode)))) then
+              if(myrank.eq.0) print *, &
+                   'Error: window-pane endpoint currents must be equal and opposite; mode, pair = ', &
+                   rmp_mode_n(irmp_mode), (i+1)/2
+              call safestop(301)
+           end if
+        end do
+     end do
   end if
   if((any(pf_tilt.ne.0.) .or. any(pf_shift.ne.0.)) &
        .and. numcoils_vac.eq.0) then
@@ -1371,5 +1444,3 @@ end subroutine boundary_fstar
 
 
 end module rmp
-
-

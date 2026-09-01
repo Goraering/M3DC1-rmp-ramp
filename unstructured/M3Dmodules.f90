@@ -205,7 +205,11 @@ module basic
   real :: ln          ! length of equilibrium gradient
   real :: eps         ! size of initial perturbation
   integer :: iwave    ! which wave to initialize in wave prop. equilibrium
-  integer :: irmp     ! 1 = read rmp coil/currents from rmp_coil.dat, rmp_current.dat
+  integer, parameter :: max_rmp_modes = 8
+  integer :: irmp     ! 1 = volume field, 2 = analytic field, 3 = current source, 4 = boundary drive
+  integer :: nrmp_modes ! number of window-pane toroidal harmonics (0 = legacy ntor)
+  integer, dimension(max_rmp_modes) :: rmp_ntor_modes
+  real :: rmp_core_radius ! finite-core radius of localized window-pane current
   integer :: iread_ext_field
   integer :: isample_ext_field
   integer :: isample_ext_field_pol

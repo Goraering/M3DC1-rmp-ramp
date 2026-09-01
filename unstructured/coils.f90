@@ -683,7 +683,7 @@ subroutine integral(npts,k2,ntor,f)
 end subroutine integral
 
 
-subroutine coil(curr, r1, z1, npts, r0, z0, ntor, fr, fphi, fz)
+subroutine coil(curr, r1, z1, npts, r0, z0, ntor, fr, fphi, fz, core_radius)
   implicit none
 
   complex, intent(in) :: curr
@@ -691,12 +691,26 @@ subroutine coil(curr, r1, z1, npts, r0, z0, ntor, fr, fphi, fz)
   integer, intent(in) :: ntor, npts
   real, intent(in), dimension(npts) :: r0, z0
   complex, intent(inout), dimension(npts) :: fr, fphi, fz
+  real, intent(in), optional :: core_radius
 
-  real, dimension(npts) :: dr2, k2, temp, co
+  real, dimension(npts) :: rho2, dr2, k2, temp, co
   complex, dimension(npts) :: fac
-  real, parameter :: dr2_fac = 1e-4
+  real :: core2
 
-  dr2 = (r0 - r1)**2 + (z0 - z1)**2 + dr2_fac
+  rho2 = (r0 - r1)**2 + (z0 - z1)**2
+  if(present(core_radius)) then
+     ! Compact finite-core regularization for an impressed current source.
+     ! Outside the core the original filament kernel is recovered exactly.
+     core2 = core_radius**2
+     dr2 = rho2
+     where(rho2.lt.core2)
+        dr2 = core2*(1./3. + (rho2/core2)**2 - &
+             (rho2/core2)**3/3.)
+     end where
+  else
+     ! Preserve the legacy globally softened filament field.
+     dr2 = rho2 + 1e-4
+  end if
   k2 = 4.*r1*r0/dr2
 
   fac = curr*r1/sqrt(dr2**3)
@@ -714,18 +728,30 @@ subroutine coil(curr, r1, z1, npts, r0, z0, ntor, fr, fphi, fz)
   
 end subroutine coil
 
-subroutine surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr, fphi, fz)
+subroutine surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr, fphi, fz, &
+     core_radius)
   implicit none
 
   real, intent(in) :: r, z, dldZ, dldR
   integer, intent(in) :: npts, ntor
   real, intent(in), dimension(npts) :: r0, z0
   complex, intent(out), dimension(npts) :: fr, fphi, fz
+  real, intent(in), optional :: core_radius
   
-  real, dimension(npts) :: dr2, fac, k2, temp1, temp2
-  real, parameter :: dr2_fac = 1e-4
+  real, dimension(npts) :: rho2, dr2, fac, k2, temp1, temp2
+  real :: core2
 
-  dr2 = (r - r0)**2 + (z - z0)**2 + dr2_fac
+  rho2 = (r - r0)**2 + (z - z0)**2
+  if(present(core_radius)) then
+     core2 = core_radius**2
+     dr2 = rho2
+     where(rho2.lt.core2)
+        dr2 = core2*(1./3. + (rho2/core2)**2 - &
+             (rho2/core2)**3/3.)
+     end where
+  else
+     dr2 = rho2 + 1e-4
+  end if
   k2 = 4.*r*r0/dr2
   fac = -ntor/sqrt(dr2**3)
 
@@ -747,7 +773,8 @@ end subroutine surface
 ! at observation point r=(r0, z0) from two axisymmetric coils
 ! at (r1,z1) and (r2,z2) carrying currents curr and -curr
 !======================================================================
-subroutine pane(curr, r1, r2, z1, z2, npts, r0, z0, ntor, fr, fphi, fz)
+subroutine pane(curr, r1, r2, z1, z2, npts, r0, z0, ntor, fr, fphi, fz, &
+     core_radius)
   implicit none
 
   complex, intent(in) :: curr
@@ -755,6 +782,7 @@ subroutine pane(curr, r1, r2, z1, z2, npts, r0, z0, ntor, fr, fphi, fz)
   integer, intent(in) :: ntor, npts
   real, intent(in), dimension(npts) :: r0, z0
   complex, intent(inout), dimension(npts) :: fr, fphi, fz
+  real, intent(in), optional :: core_radius
 
   complex, dimension(npts) :: fr0, fphi0, fz0
   complex, dimension(npts) :: fr1, fphi1, fz1
@@ -764,8 +792,8 @@ subroutine pane(curr, r1, r2, z1, z2, npts, r0, z0, ntor, fr, fphi, fz)
   integer, parameter :: ilmax = 100
 
   ! calculate conitrbution from coils
-  call coil( curr,r1,z1,npts,r0,z0,ntor,fr,fphi,fz)
-  call coil(-curr,r2,z2,npts,r0,z0,ntor,fr,fphi,fz)
+  call coil( curr,r1,z1,npts,r0,z0,ntor,fr,fphi,fz,core_radius)
+  call coil(-curr,r2,z2,npts,r0,z0,ntor,fr,fphi,fz,core_radius)
 
   lmax = sqrt((r2-r1)**2 + (z2-z1)**2)
   dl = lmax/ilmax
@@ -777,17 +805,20 @@ subroutine pane(curr, r1, r2, z1, z2, npts, r0, z0, ntor, fr, fphi, fz)
   ! calculate contribution from surface currents 
   r = r1
   z = z1
-  call surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr0, fphi0, fz0)
+  call surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr0, fphi0, fz0, &
+       core_radius)
   l = 0.
   do il=1, ilmax
      
      r = (r2*(l+dl2) + r1*(lmax-(l+dl2)))/lmax
      z = (z2*(l+dl2) + z1*(lmax-(l+dl2)))/lmax
-     call surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr1, fphi1, fz1)
+     call surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr1, fphi1, fz1, &
+          core_radius)
        
      r = (r2*(l+dl) + r1*(lmax-(l+dl)))/lmax
      z = (z2*(l+dl) + z1*(lmax-(l+dl)))/lmax
-     call surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr2, fphi2, fz2)
+     call surface(r, z, dldR, dldZ, npts, r0, z0, ntor, fr2, fphi2, fz2, &
+          core_radius)
 
      fr = fr + curr*dl*(fr0 + 4.*fr1 + fr2)/6.
      fphi = fphi + curr*dl*(fphi0 + 4.*fphi1 + fphi2)/6.

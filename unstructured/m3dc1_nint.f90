@@ -130,6 +130,13 @@ module m3dc1_nint
 !$OMP THREADPRIVATE(pss79,bzs79)
   vectype, dimension(MAX_PTS, OP_NUM) :: bzx79, psx79, bfpx79, bfx79, psc79
 !$OMP THREADPRIVATE(bzx79,psx79,bfpx79,bfx79,psc79)
+  ! Unscaled prescribed magnetic reference field.  For irmp=3 these arrays
+  ! carry the impressed-current basis used by the source terms.  For a
+  ! ramped read field they retain the unscaled basis needed by the explicit
+  ! Faraday source, while psx79/bzx79/... carry the instantaneous field.
+  vectype, dimension(MAX_PTS, OP_NUM) :: bzcoil79, pscoil79, &
+       bfpcoil79, bfcoil79
+!$OMP THREADPRIVATE(bzcoil79,pscoil79,bfpcoil79,bfcoil79)
   vectype, dimension(MAX_PTS, OP_NUM) :: pstx79, bztx79, bfptx79, bftx79
 !$OMP THREADPRIVATE(pstx79,bztx79,bfptx79,bftx79)
   vectype, dimension(MAX_PTS, OP_NUM) :: te179, te079, tet79
@@ -772,10 +779,18 @@ contains
     if(iand(fields, FIELD_PSI).eq.FIELD_PSI) then
        if(itri.eq.1 .and. myrank.eq.0 .and. iprint.ge.2) print *, "   psi..."
 
-       if(use_external_fields) then 
-          call eval_ops(itri, psi_ext, psx79, rfac)
-          if(iramp_data) then
-             psx79 = psx79 * ext_field_ramp_data(ntime)
+       pscoil79 = 0.
+       psx79 = 0.
+       if(use_external_fields .and. &
+            .not.(irmp.eq.4 .and. iread_ext_field.ne.0)) then
+          call eval_ops(itri, psi_ext, pscoil79, rfac)
+          if(irmp.eq.3) then
+             ! Source mode: retain the unscaled coil-current basis without
+             ! adding it algebraically to the physical magnetic field.
+          else
+             psx79 = pscoil79
+             if(iramp_data) &
+                  psx79 = psx79*ext_field_ramp_data(ntime)
           end if
        else
           psx79 = 0.
@@ -830,19 +845,35 @@ contains
     if(iand(fields, FIELD_I).eq.FIELD_I) then
        
        if(itri.eq.1 .and. myrank.eq.0 .and. iprint.ge.2) print *, "   I..."
-      
-       if(use_external_fields) then
-          call eval_ops(itri, bz_ext, bzx79, rfac)
-#if defined(USECOMPLEX) || defined(USE3D)    
-          call eval_ops(itri, bf_ext, bfx79, rfac)
-          call eval_ops(itri, bfp_ext, bfpx79, rfac)
+
+       bzcoil79 = 0.
+       bfcoil79 = 0.
+       bfpcoil79 = 0.
+       bzx79 = 0.
+       bfx79 = 0.
+       bfpx79 = 0.
+       if(use_external_fields .and. &
+            .not.(irmp.eq.4 .and. iread_ext_field.ne.0)) then
+          call eval_ops(itri, bz_ext, bzcoil79, rfac)
+#if defined(USECOMPLEX) || defined(USE3D)
+          call eval_ops(itri, bf_ext, bfcoil79, rfac)
+          call eval_ops(itri, bfp_ext, bfpcoil79, rfac)
 #endif
-          if(iramp_data) then
-             bzx79 = bzx79 * ext_field_ramp_data(ntime)
-#if defined(USECOMPLEX) || defined(USE3D)    
-             bfx79 = bfx79 * ext_field_ramp_data(ntime)
-             bfpx79 = bfpx79 * ext_field_ramp_data(ntime)
+          if(irmp.eq.3) then
+             ! Source mode uses only the unscaled reference-current field.
+          else
+             bzx79 = bzcoil79
+#if defined(USECOMPLEX) || defined(USE3D)
+             bfx79 = bfcoil79
+             bfpx79 = bfpcoil79
 #endif
+             if(iramp_data) then
+                bzx79 = bzx79*ext_field_ramp_data(ntime)
+#if defined(USECOMPLEX) || defined(USE3D)
+                bfx79 = bfx79*ext_field_ramp_data(ntime)
+                bfpx79 = bfpx79*ext_field_ramp_data(ntime)
+#endif
+             end if
           end if
        else
           bzx79 = 0.

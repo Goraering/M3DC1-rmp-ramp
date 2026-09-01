@@ -111,7 +111,9 @@ subroutine get_flux_mask(itri, imask)
         ibound = ior(ibound, BOUNDARY_NEUMANNP)
      endif
   endif
-  if(iconst_bn.eq.1) ibound = ior(ibound, BOUNDARY_DIRICHLET)
+  if(iconst_bn.eq.1 .or. &
+       (irmp.eq.4 .and. iread_ext_field.ne.0)) &
+       ibound = ior(ibound, BOUNDARY_DIRICHLET)
 
   call get_boundary_mask(itri, ibound, imask)
 end subroutine get_flux_mask
@@ -481,8 +483,9 @@ subroutine boundary_mag(rhs, psi_v, bz_v, bfp_v, e_v, mat)
   type(field_type) :: psi_v, bz_v, bfp_v, e_v
   type(matrix_type), optional :: mat
 
-  vectype, dimension(dofs_per_node) :: temp !, temp2, temp3
+  vectype, dimension(dofs_per_node) :: temp, temp_ext !, temp2, temp3
   real :: normal(2), curv(3), x, z, phi
+  real :: ext_scale, ext_scale_old
   integer :: i, izone, izonedim,  numnodes, icounter_t
   integer :: i_psi, i_bz, i_e, i_bf !, i_pe
   logical :: is_boundary
@@ -503,10 +506,32 @@ subroutine boundary_mag(rhs, psi_v, bz_v, bfp_v, e_v, mat)
      if(imp_bf.eq.1) i_bf = node_index(bfp_v, i)
 
      ! constant normal field = -t.grad(psi)/R - n.grad(f')
-     if(iconst_bn.eq.1) then
-        call get_node_data(psi_field(1), i, temp)
+     if(iconst_bn.eq.1 .or. &
+          (irmp.eq.4 .and. iread_ext_field.ne.0)) then
+        if(irmp.eq.4 .and. iread_ext_field.ne.0) then
+           ! Impose the ramped external normal field through the boundary;
+           ! the corresponding volume field is excluded in define_fields.
+           if(idiff.gt.0) then
+              temp = 0.
+           else
+              ! Start from the accepted state so nonlinear iterations do not
+              ! accumulate the same ramp increment repeatedly.
+              call get_node_data(psi_field(1), i, temp)
+           end if
+           call get_node_data(psi_ext, i, temp_ext)
+
+           ext_scale = 1.
+           ext_scale_old = 1.
+           if(iuse_ext_field_ramp.eq.1) then
+              ext_scale = ext_field_ramp_data(ntime)
+              ext_scale_old = ext_field_ramp_data(max(0,ntime-1))
+           end if
+           temp = temp + (ext_scale-ext_scale_old)*temp_ext
+        else
+           call get_node_data(psi_field(1), i, temp)
+           if(idiff.gt.0) temp = 0.
+        end if
         ! add loop voltage
-        if(idiff .gt. 0) temp = 0.
         if(igauge.eq.0) temp(1) = temp(1) + dt*vloop/toroidal_period
         call set_dirichlet_bc(i_psi,rhs,temp,normal,curv,izonedim,mat)
      end if
@@ -556,15 +581,35 @@ subroutine boundary_mag(rhs, psi_v, bz_v, bfp_v, e_v, mat)
      endif
 
      if(imp_bf.eq.1) then
-#ifdef USEST
-        call get_node_data(bfp_field(1), i, temp)
-#else
-        temp = 0.
-#endif
-        if(ifbound.eq.1) then 
-           call set_dirichlet_bc(i_bf,rhs,temp,normal,curv,izonedim,mat)
-        else if(ifbound.eq.2) then 
+        if(irmp.eq.4 .and. iread_ext_field.ne.0) then
+           ! Complete B.n by imposing the normal derivative of f'=bfp.
+           call get_node_data(bfp_ext, i, temp_ext)
+
+           ext_scale = 1.
+           ext_scale_old = 1.
+           if(iuse_ext_field_ramp.eq.1) then
+              ext_scale = ext_field_ramp_data(ntime)
+              ext_scale_old = ext_field_ramp_data(max(0,ntime-1))
+           end if
+           if(idiff.gt.0) then
+              temp = (ext_scale-ext_scale_old)*temp_ext
+           else
+              ! ifbound=2 has a zero baseline Neumann datum, so use the
+              ! absolute ramped target for a non-difference solve.
+              temp = ext_scale*temp_ext
+           end if
            call set_normal_bc(i_bf,rhs,temp,normal,curv,izonedim,mat)
+        else
+#ifdef USEST
+           call get_node_data(bfp_field(1), i, temp)
+#else
+           temp = 0.
+#endif
+           if(ifbound.eq.1) then
+              call set_dirichlet_bc(i_bf,rhs,temp,normal,curv,izonedim,mat)
+           else if(ifbound.eq.2) then
+              call set_normal_bc(i_bf,rhs,temp,normal,curv,izonedim,mat)
+           end if
         end if
      end if
   end do

@@ -560,7 +560,7 @@ subroutine print_info
   ! check time-integration options
   select case(integrator)
   case(1)
-     ! For BDF2 integration, first timestep is Crank-Nicholson with thimp=1,
+     ! For BDF2 integration, the first timestep uses backward Euler (thimp=1),
      ! and subsequent timesteps are BDF2.
      if(myrank.eq.0) print *, "Time integration: BDF2."
   case default
@@ -1403,10 +1403,6 @@ if (ispradapt .eq. 1) then
         call create_field(bz_ext, "bz_ext")
         call create_field(bf_ext, "bf_ext")
         call create_field(bfp_ext, "bfp_ext")
-        psi_ext = 0.
-        bz_ext = 0.
-        bf_ext = 0.
-        bfp_ext = 0.
         use_external_fields = .true.
      end if
 else
@@ -1463,10 +1459,6 @@ else
         call create_field(bz_ext)
         call create_field(bf_ext)
         call create_field(bfp_ext)
-        psi_ext = 0.
-        bz_ext = 0.
-        bf_ext = 0.
-        bfp_ext = 0.
         use_external_fields = .true.
      end if
 endif

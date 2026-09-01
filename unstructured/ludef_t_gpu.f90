@@ -5545,6 +5545,83 @@ subroutine j_equation_lin(trial, lin, ssterm, ddterm, r_bf, q_bf)
 end subroutine j_equation_lin
 
 
+!======================================================================
+! Faraday sources for a ramped, volume-added read external field.
+!
+! The GPU metric module represents each mass form as a prodarray.  Contract
+! that exact operator with the unscaled prescribed field so this RHS is
+! identical to the magnetic time-mass operator used by the GPU assembly.
+!======================================================================
+subroutine read_external_ramp_flux_source(trialx, r4term, izone)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  integer, intent(in) :: izone
+  type(prodarray) :: mass_operator
+  real :: scale_difference
+  integer :: i, iterm
+
+  r4term = 0.
+  if(irmp.ne.0 .or. iread_ext_field.le.0 .or. .not.iramp_data) return
+  if(izone.ne.ZONE_PLASMA .and. izone.ne.ZONE_CONDUCTOR) return
+
+  scale_difference = ext_field_ramp_data(ntime) - &
+       ext_field_ramp_data(max(0,ntime-1))
+  if(scale_difference.eq.0.) return
+
+  mass_operator = b1psi()
+  do iterm=1,mass_operator%len
+     do i=1,dofs_per_element
+        r4term(i) = r4term(i) - scale_difference*sum( &
+             trialx(i,:,mass_operator%op1(iterm))* &
+             mass_operator%value79(:,iterm)* &
+             pscoil79(:,mass_operator%op2(iterm))*weight_79)
+     end do
+  end do
+end subroutine read_external_ramp_flux_source
+
+
+! bz is the F=R*B_phi unknown in tokamak geometry (historically called the
+! axial field in the cylindrical formulation), not the vertical B_Z field.
+subroutine read_external_ramp_toroidal_field_source(trialx, r4term, izone)
+  use basic
+  use m3dc1_nint
+  use metricterms_new
+
+  implicit none
+
+  vectype, intent(in), dimension(dofs_per_element,MAX_PTS,OP_NUM) :: trialx
+  vectype, intent(out), dimension(dofs_per_element) :: r4term
+  integer, intent(in) :: izone
+  type(prodarray) :: mass_operator
+  real :: scale_difference
+  integer :: i, iterm
+
+  r4term = 0.
+  if(irmp.ne.0 .or. iread_ext_field.le.0 .or. .not.iramp_data) return
+  if(izone.ne.ZONE_PLASMA .and. izone.ne.ZONE_CONDUCTOR) return
+
+  scale_difference = ext_field_ramp_data(ntime) - &
+       ext_field_ramp_data(max(0,ntime-1))
+  if(scale_difference.eq.0.) return
+
+  mass_operator = b2b()
+  do iterm=1,mass_operator%len
+     do i=1,dofs_per_element
+        r4term(i) = r4term(i) - scale_difference*sum( &
+             trialx(i,:,mass_operator%op1(iterm))* &
+             mass_operator%value79(:,iterm)* &
+             bzcoil79(:,mass_operator%op2(iterm))*weight_79)
+     end do
+  end do
+end subroutine read_external_ramp_toroidal_field_source
+
+
 
 !======================================================================
 ! ludefall
@@ -5586,6 +5663,15 @@ subroutine ludefall(ivel_def, idens_def, ipres_def, ipressplit_def,  ifield_def)
   integer :: is_edge(3)  ! is inode on boundary
   real :: n(2,3)
   integer :: iedge, idim(3)
+
+  ! irmp=3 requires Jplasma=J-Jcoil in every plasma equation.  The GPU
+  ! assembly does not yet implement those source corrections, so reject the
+  ! mode instead of silently solving a different physical model.
+  if(irmp.eq.3) then
+     if(myrank.eq.0) print *, &
+          'Error: irmp=3 is not implemented in ludef_t_gpu.f90'
+     call safestop(51)
+  end if
 
   tfield = 0.
   telm = 0.
@@ -6086,7 +6172,7 @@ subroutine ludefphi_n(itri)
 
   vectype, dimension(dofs_per_element,dofs_per_element,num_fields) :: ss, dd
   vectype, dimension(dofs_per_element,dofs_per_element) :: r_bf, q_bf
-  vectype, dimension(dofs_per_element) :: q4
+  vectype, dimension(dofs_per_element) :: q4, qsource
   vectype, dimension(dofs_per_element,dofs_per_element,2) :: q_ni
 
   type(matrix_type), pointer :: bb1, bb0, bv1, bv0, bf0, bf1, bn1, bn0, &
@@ -6266,9 +6352,19 @@ subroutine ludefphi_n(itri)
 
      if(ieq(k).eq.psi_i) then
         if(izone.eq.1) call flux_nolin(mu79,q4)
-     else if(ieq(k).eq.bz_i .and. numvar.ge.2) then
+        if(irmp.eq.0 .and. iread_ext_field.gt.0 .and. iramp_data .and. &
+             (izone.eq.ZONE_PLASMA .or. izone.eq.ZONE_CONDUCTOR)) then
+           call read_external_ramp_flux_source(mu79,qsource,izone)
+           q4 = q4 + qsource
+        end if
+      else if(ieq(k).eq.bz_i .and. numvar.ge.2) then
         if(izone.eq.1) call axial_field_nolin(mu79,q4)
-     else if(ieq(k).eq.ppe_i .and. ipressplit.eq.0 .and. numvar.ge.3) then
+        if(irmp.eq.0 .and. iread_ext_field.gt.0 .and. iramp_data .and. &
+             (izone.eq.ZONE_PLASMA .or. izone.eq.ZONE_CONDUCTOR)) then
+           call read_external_ramp_toroidal_field_source(mu79,qsource,izone)
+           q4 = q4 + qsource
+        end if
+      else if(ieq(k).eq.ppe_i .and. ipressplit.eq.0 .and. numvar.ge.3) then
         if(izone.eq.1) call pressure_nolin(mu79,q4,ipres.eq.0)
      else if(ieq(k).eq.bf_i .and. imp_bf.eq.1) then
         call bf_equation_nolin(mu79,q4)

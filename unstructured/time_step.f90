@@ -93,6 +93,7 @@ subroutine onestep
 
   integer :: calc_matrices, ivel_def, irepeat
   logical, save :: first_time = .true.
+  logical :: ramped_external_assembly_changed
 
   real :: tstart, tend
 
@@ -100,10 +101,27 @@ subroutine onestep
   integer :: icount, maxiter
 #endif
 
+  ! ludefall clears and rebuilds q4_vec together with the matrices.  A
+  ! volume/source ramp changes assembled coefficients and q4_vec, so rebuild
+  ! when a_n changes.  Rebuild once more on the first hold step to clear the
+  ! previous nonzero Delta(a) source from persistent q4_vec.  Boundary mode
+  ! updates its RHS separately and does not use this assembly path.
+  ramped_external_assembly_changed = .false.
+  if(iramp_data .and. use_external_fields .and. irmp.ne.4 .and. &
+       ntime.gt.1) then
+     ramped_external_assembly_changed = &
+          ext_field_ramp_data(ntime).ne. &
+              ext_field_ramp_data(ntime-1) .or. &
+          ext_field_ramp_data(ntime-1).ne. &
+              ext_field_ramp_data(ntime-2)
+  end if
+
   ! Determine whether matrices should be re-calculated
   if(first_time &
        .or. (linear.eq.0 .and. mod(ntime,nskip).eq.0) &
-       .or. (integrator.eq.1 .and. ntime.eq.1) .or. meshAdapted .eq. 1) then
+       .or. (integrator.eq.1 .and. ntime.eq.1) &
+       .or. ramped_external_assembly_changed &
+       .or. meshAdapted .eq. 1) then
      calc_matrices = 1
   else
      calc_matrices = 0

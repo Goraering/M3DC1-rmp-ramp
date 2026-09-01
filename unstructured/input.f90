@@ -587,7 +587,15 @@ subroutine set_defaults
   call add_var_int("maxn", maxn, 200, "", eq_grp)
   call add_var_int("irmp", irmp, 0, &
        "1: Apply nonaxisym. fields throughout plasma|&
-       &2: Apply mpol/ntor vacuum fields (itor=0 only)", eq_grp)
+       &2: Apply mpol/ntor vacuum fields (itor=0 only)|&
+       &3: Use localized window-pane impressed-current source|&
+       &4: Apply a read external field through the domain boundary", eq_grp)
+  call add_var_int("nrmp_modes", nrmp_modes, 0, &
+       "Number of simultaneous window-pane toroidal harmonics (0: use ntor)", eq_grp)
+  call add_var_int_array("rmp_ntor_modes", rmp_ntor_modes, max_rmp_modes, 0, &
+       "Toroidal harmonics for window-pane current files rmp_current_nNNN.dat", eq_grp)
+  call add_var_double("rmp_core_radius", rmp_core_radius, 0.01, &
+       "Finite-core radius of the localized window-pane current (normalized length)", eq_grp)
   call add_var_double("rmp_atten", rmp_atten, 0., &
        "Additional exponential decay of RMP field from r=1 for irmp=2", eq_grp)
   call add_var_double("tf_tilt", tf_tilt, 0., &
@@ -1726,6 +1734,147 @@ subroutine validate_input
      end if
   end if
 
+  if(irmp.lt.0 .or. irmp.gt.4) then
+     if(myrank.eq.0) print *, 'Error: irmp must be between 0 and 4'
+     call safestop(1)
+  end if
+
+  if(iuse_ext_field_ramp.lt.0 .or. iuse_ext_field_ramp.gt.1) then
+     if(myrank.eq.0) print *, &
+          'Error: iuse_ext_field_ramp must be either 0 or 1'
+     call safestop(1)
+  end if
+
+  if(irmp.eq.0 .and. iread_ext_field.gt.0 .and. &
+       iuse_ext_field_ramp.eq.1) then
+     ! A time-dependent read field must remain separate from the evolved
+     ! magnetic field so that its Faraday source can drive the plasma and
+     ! conductor response.  With extsubtract=0 the field is copied into the
+     ! initial solution once and the requested ramp is otherwise inactive.
+     if(extsubtract.ne.1) then
+        if(myrank.eq.0) print *, &
+             'Setting extsubtract=1 for the ramped read external field'
+        extsubtract = 1
+     end if
+     if(itime_independent.eq.1) then
+        if(myrank.eq.0) print *, &
+             'Error: ramped read external fields require ', &
+             'itime_independent=0; the Faraday source is time dependent'
+        call safestop(1)
+     end if
+     if(integrator.ne.0) then
+        if(myrank.eq.0) print *, &
+             'Error: ramped read external fields require integrator=0; ', &
+             'non-CN magnetic/source history is not implemented'
+        call safestop(1)
+     end if
+     if(myrank.eq.0 .and. (thimp.ne.1. .or. isplitstep.ne.0 .or. &
+          (i3d.eq.1 .and. imp_bf.ne.1))) then
+        print *, 'Warning: explicit/CN plasma coupling to the ramped read ', &
+             'field uses the current-step scale (first-order frozen ramp)'
+        print *, 'Exact backward-Euler centering requires thimp=1, ', &
+             'isplitstep=0, and imp_bf=1 for 3-D'
+     end if
+  end if
+
+  if(nrmp_modes.lt.0 .or. nrmp_modes.gt.max_rmp_modes) then
+     if(myrank.eq.0) print *, 'Error: nrmp_modes must be between 0 and ', &
+          max_rmp_modes
+     call safestop(1)
+  end if
+
+  if(nrmp_modes.gt.0) then
+     if(irmp.ne.1 .and. irmp.ne.3) then
+        if(myrank.eq.0) print *, &
+             'Error: nrmp_modes requires window-pane fields (irmp=1 or 3)'
+        call safestop(1)
+     end if
+     if(type_ext_field.gt.0) then
+        if(myrank.eq.0) print *, &
+             'Error: window-pane RMP modes require type_ext_field<=0'
+        call safestop(1)
+     end if
+     if(any(rmp_ntor_modes(1:nrmp_modes).le.0)) then
+        if(myrank.eq.0) print *, 'Error: all rmp_ntor_modes must be positive'
+        call safestop(1)
+     end if
+     do i=1,nrmp_modes
+        if(count(rmp_ntor_modes(1:nrmp_modes).eq.rmp_ntor_modes(i)).gt.1) then
+           if(myrank.eq.0) print *, 'Error: duplicate rmp_ntor_modes entry: ', &
+                rmp_ntor_modes(i)
+           call safestop(1)
+        end if
+     end do
+#if !defined(USE3D) && !defined(USECOMPLEX)
+     if(myrank.eq.0) print *, &
+          'Error: simultaneous RMP modes require a full-3D build'
+     call safestop(1)
+#endif
+#ifdef USECOMPLEX
+     if(nrmp_modes.ne.1 .or. rmp_ntor_modes(1).ne.ntor) then
+        if(myrank.eq.0) print *, &
+             'Error: a complex run supports one RMP mode equal to ntor'
+        call safestop(1)
+     end if
+#endif
+  end if
+
+  if(irmp.eq.3) then
+     if(integrator.ne.0) then
+        if(myrank.eq.0) print *, &
+             'Error: irmp=3 requires integrator=0; ', &
+             'non-CN coil-source history is not implemented'
+        call safestop(1)
+     end if
+     if(rmp_core_radius.le.0.) then
+        if(myrank.eq.0) print *, 'Error: rmp_core_radius must be positive for irmp=3'
+        call safestop(1)
+     end if
+     if(linear.ne.0) then
+        if(myrank.eq.0) print *, &
+             'Error: the irmp=3 plasma current source currently requires linear=0'
+        call safestop(1)
+     end if
+     if(iread_ext_field.ne.0 .or. tf_tilt.ne.0. .or. tf_shift.ne.0. .or. &
+          any(pf_tilt.ne.0.) .or. any(pf_shift.ne.0.)) then
+        if(myrank.eq.0) print *, &
+             'Error: irmp=3 cannot be mixed with other external fields'
+        call safestop(1)
+     end if
+     if(type_ext_field.gt.0) then
+        if(myrank.eq.0) print *, &
+             'Error: irmp=3 requires type_ext_field<=0'
+        call safestop(1)
+     end if
+     if(extsubtract.ne.1) then
+        if(myrank.eq.0) print *, &
+             'Setting extsubtract=1 for the irmp=3 current basis'
+        extsubtract = 1
+     end if
+     if(iuse_ext_field_ramp.ne.1 .and. myrank.eq.0) print *, &
+          'Warning: coil current is constant from t=0; use a ramp for a penetration transient'
+     if(imp_hyper.gt.0 .and. myrank.eq.0) print *, &
+          'Warning: hyper-resistivity still acts on the total Ampere current'
+  end if
+
+  if(irmp.eq.4) then
+     if(iread_ext_field.le.0) then
+        if(myrank.eq.0) print *, &
+             'Error: irmp=4 requires iread_ext_field>0'
+        call safestop(1)
+     end if
+     if(itaylor.eq.40 .or. itaylor.eq.41) then
+        if(myrank.eq.0) print *, &
+             'Error: irmp=4 is only supported for tokamak external fields'
+        call safestop(1)
+     end if
+     if(extsubtract.ne.1) then
+        if(myrank.eq.0) print *, &
+             'Setting extsubtract=1 for the irmp=4 boundary field'
+        extsubtract = 1
+     end if
+  end if
+
 
   if(iprad.eq.1 .and. myrank.eq.0) then
      if( (prad_z .ne. 6) .and. (prad_z .ne. 18) .and. (prad_z .ne. 26) ) then
@@ -1753,6 +1902,26 @@ subroutine validate_input
      ifbound = 2
 #else
      ifbound = 1
+#endif
+  end if
+
+  if(irmp.eq.4) then
+#if defined(USE3D) || defined(USECOMPLEX)
+     if(numvar.lt.2) then
+        if(myrank.eq.0) print *, &
+             'Error: 3-D irmp=4 requires numvar >= 2'
+        call safestop(1)
+     end if
+     if(imp_bf.ne.1) then
+        if(myrank.eq.0) print *, &
+             'Error: 3-D irmp=4 requires imp_bf=1 to impose the f-prime part of B.n'
+        call safestop(1)
+     end if
+     if(ifbound.ne.2) then
+        if(myrank.eq.0) print *, &
+             'Error: 3-D irmp=4 requires ifbound=2 (Neumann condition on f-prime)'
+        call safestop(1)
+     end if
 #endif
   end if
 

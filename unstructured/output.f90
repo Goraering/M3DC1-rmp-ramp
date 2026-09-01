@@ -730,6 +730,14 @@ subroutine hdf5_write_time_slice(equilibrium, error)
   ! Write attributes
   if(myrank.eq.0 .and. iprint.ge.1) print *, '  Writing attr '
   call write_real_attr(time_root_id, "time", time, error)
+  if(equilibrium.eq.0 .and. irmp.eq.0 .and. &
+       iread_ext_field.gt.0 .and. iramp_data) then
+     ! Preserve the scale represented by the saved response field.  Restart
+     ! uses this value to reject an input schedule that would make the total
+     ! magnetic field jump at the restart time.
+     call write_real_attr(time_root_id, "ext_field_ramp_scale", &
+          ext_field_ramp_data(ntime), error)
+  end if
 #ifdef USE3D
   call write_int_attr(time_root_id, "nspace", 3, error)
 #else
@@ -999,7 +1007,7 @@ subroutine write_field(group_id, name, f, nelms, error, isreal, scale)
   do i=1, nelms
      call calcavector(i, f, dum(:,i))
   end do
-  if (present(scale)) dum = dum * scale
+  if(present(scale)) dum = dum*scale
   call output_field(group_id, name, real(dum), coeffs_per_element, &
        nelms, error)
 #ifdef USECOMPLEX
@@ -1067,12 +1075,15 @@ subroutine output_fields(time_group_id, equilibrium, error)
      dum = dum + dum2
      deallocate(dum2)
   endif
-  if(extsubtract.eq.1 .and. (ilin.eq.1 .or. eqsubtract.eq.0)) then 
+  if(extsubtract.eq.1 .and. (ilin.eq.1 .or. eqsubtract.eq.0) .and. &
+       .not.(irmp.eq.4 .and. iread_ext_field.ne.0) .and. &
+       irmp.ne.3) then
      allocate(dum2(coeffs_per_element,nelms))
      do i=1, nelms
         call calcavector(i, psi_ext, dum2(:,i))
      end do
-     if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
+     if(iuse_ext_field_ramp.eq.1) &
+          dum2 = dum2*ext_field_ramp_data(ntime)
      dum = dum + dum2
      deallocate(dum2)
   end if
@@ -1105,13 +1116,17 @@ subroutine output_fields(time_group_id, equilibrium, error)
           nelms,error)
 #endif
 
-     allocate(dum2(coeffs_per_element,nelms))
-     do i=1, nelms
-        call calcavector(i, bz_ext, dum2(:,i))
-     end do
-     if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
-     dum = dum + dum2
-     deallocate(dum2)
+     if(.not.(irmp.eq.4 .and. iread_ext_field.ne.0) .and. &
+          irmp.ne.3) then
+        allocate(dum2(coeffs_per_element,nelms))
+        do i=1, nelms
+           call calcavector(i, bz_ext, dum2(:,i))
+        end do
+        if(iuse_ext_field_ramp.eq.1) &
+             dum2 = dum2*ext_field_ramp_data(ntime)
+        dum = dum + dum2
+        deallocate(dum2)
+     end if
   end if
   call output_field(group_id, "I", real(dum), coeffs_per_element, &
        nelms, error)
@@ -1133,13 +1148,17 @@ subroutine output_fields(time_group_id, equilibrium, error)
              nelms,error)
 #endif
 
-        allocate(dum2(coeffs_per_element,nelms))
-        do i=1, nelms
-           call calcavector(i, bf_ext, dum2(:,i))
-        end do
-        if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
-        dum = dum + dum2
-        deallocate(dum2)
+        if(.not.(irmp.eq.4 .and. iread_ext_field.ne.0) .and. &
+             irmp.ne.3) then
+           allocate(dum2(coeffs_per_element,nelms))
+           do i=1, nelms
+              call calcavector(i, bf_ext, dum2(:,i))
+           end do
+           if(iuse_ext_field_ramp.eq.1) &
+                dum2 = dum2*ext_field_ramp_data(ntime)
+           dum = dum + dum2
+           deallocate(dum2)
+        end if
      end if
      call output_field(group_id, "f", real(dum), coeffs_per_element, &
           nelms, error)
@@ -1162,13 +1181,17 @@ subroutine output_fields(time_group_id, equilibrium, error)
              nelms,error)
 #endif
 
-        allocate(dum2(coeffs_per_element,nelms))
-        do i=1, nelms
-           call calcavector(i, bfp_ext, dum2(:,i))
-        end do
-        if(iuse_ext_field_ramp .eq. 1) dum2 = dum2 * ext_field_ramp_data(ntime)
-        dum = dum + dum2
-        deallocate(dum2)
+        if(.not.(irmp.eq.4 .and. iread_ext_field.ne.0) .and. &
+             irmp.ne.3) then
+           allocate(dum2(coeffs_per_element,nelms))
+           do i=1, nelms
+              call calcavector(i, bfp_ext, dum2(:,i))
+           end do
+           if(iuse_ext_field_ramp.eq.1) &
+                dum2 = dum2*ext_field_ramp_data(ntime)
+           dum = dum + dum2
+           deallocate(dum2)
+        end if
      end if
      call output_field(group_id, "fp", real(dum), coeffs_per_element, &
           nelms, error)
@@ -1230,15 +1253,27 @@ subroutine output_fields(time_group_id, equilibrium, error)
   end if
 #endif
 
-  if(use_external_fields) then 
-     if (iuse_ext_field_ramp .eq. 1) then
-        call write_field(group_id, "psi_ext", psi_ext, nelms, error, scale=ext_field_ramp_data(ntime))
-        call write_field(group_id, "I_ext", bz_ext, nelms, error, scale=ext_field_ramp_data(ntime))    
-        call write_field(group_id, "f_ext", bf_ext, nelms, error, scale=ext_field_ramp_data(ntime))
-        call write_field(group_id, "fp_ext", bfp_ext, nelms, error, scale=ext_field_ramp_data(ntime))
+  if(use_external_fields) then
+     if(irmp.eq.3) then
+        ! Source mode stores the unscaled impressed-current basis.  The
+        ! ramped field is assembled through the source terms, not added to
+        ! the output total magnetic field.
+        call write_field(group_id, "psi_ext", psi_ext, nelms, error)
+        call write_field(group_id, "I_ext", bz_ext, nelms, error)
+        call write_field(group_id, "f_ext", bf_ext, nelms, error)
+        call write_field(group_id, "fp_ext", bfp_ext, nelms, error)
+     else if(iuse_ext_field_ramp.eq.1) then
+        call write_field(group_id, "psi_ext", psi_ext, nelms, error, &
+             scale=ext_field_ramp_data(ntime))
+        call write_field(group_id, "I_ext", bz_ext, nelms, error, &
+             scale=ext_field_ramp_data(ntime))
+        call write_field(group_id, "f_ext", bf_ext, nelms, error, &
+             scale=ext_field_ramp_data(ntime))
+        call write_field(group_id, "fp_ext", bfp_ext, nelms, error, &
+             scale=ext_field_ramp_data(ntime))
      else
         call write_field(group_id, "psi_ext", psi_ext, nelms, error)
-        call write_field(group_id, "I_ext", bz_ext, nelms, error)    
+        call write_field(group_id, "I_ext", bz_ext, nelms, error)
         call write_field(group_id, "f_ext", bf_ext, nelms, error)
         call write_field(group_id, "fp_ext", bfp_ext, nelms, error)
      end if
