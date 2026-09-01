@@ -79,7 +79,7 @@ int copyField2PetscVec_5(FieldID field_id, Vec petscVec, int scalar_type)
   ierr = VecSetSizes(petscVec, num_own_dof, PETSC_DECIDE); CHKERRQ(ierr);
  * */
   int ierr = VecSetFromOptions(petscVec);CHKERRQ(ierr);
-//  VecAssemblyBegin(petscVec);
+  VecAssemblyBegin(petscVec);
 
   int num_vtx=m3dc1_mesh::instance()->num_local_ent[0];
 
@@ -124,7 +124,6 @@ int copyField2PetscVec_5(FieldID field_id, Vec petscVec, int scalar_type)
   mesh->end(ent_it);
 
   assert(nodeCounter==num_own_ent);
-  VecAssemblyBegin(petscVec);
   ierr=VecAssemblyEnd(petscVec);
   CHKERRQ(ierr);
   PetscFunctionReturn(0);  // PETSC_SUCCESS (0) to indicate success
@@ -150,7 +149,7 @@ int copyField2PetscVec(FieldID field_id, Vec petscVec, int scalar_type) {
   CHKERRQ(ierr); */
   ierr = VecSetFromOptions(petscVec);
   CHKERRQ(ierr);
-//  VecAssemblyBegin(petscVec);
+  VecAssemblyBegin(petscVec);
 
   int num_vtx = m3dc1_mesh::instance()->num_local_ent[0];
 
@@ -199,8 +198,6 @@ int copyField2PetscVec(FieldID field_id, Vec petscVec, int scalar_type) {
   mesh->end(ent_it);
 
   assert(nodeCounter == num_own_ent);
-  VecAssemblyBegin(petscVec);
-
   ierr = VecAssemblyEnd(petscVec);
   CHKERRQ(ierr);
   return 0;
@@ -1538,10 +1535,32 @@ int matrix_solve::setKspType() {
       ierr = KSPSetOptionsPrefix(_ksp, "hard_");
       ierr = MatViewFromOptions(_A, NULL, "-A_view");
     }
-	if (mymatrix_id == 6) {
-		ierr = KSPSetOptionsPrefix(_ksp, "hardfield_"); 
-	}
+
+    if (mymatrix_id == 6) {
+      char *allOptions = NULL, *hardfieldOption = NULL;
+      PetscBool useHardfieldPrefix = PETSC_FALSE;
+
+      ierr = PetscOptionsGetAll(NULL, &allOptions);
+      CHKERRQ(ierr);
+      if (allOptions) {
+        ierr = PetscStrstr(allOptions, "-hardfield_", &hardfieldOption);
+        CHKERRQ(ierr);
+        useHardfieldPrefix = hardfieldOption ? PETSC_TRUE : PETSC_FALSE;
+      }
+      ierr = PetscFree(allOptions);
+      CHKERRQ(ierr);
+
+      if (useHardfieldPrefix) {
+        ierr = KSPSetOptionsPrefix(_ksp, "hardfield_");
+        CHKERRQ(ierr);
+      }
+    }
   }
+
+  // Give matrix 6 its own PETSc option namespace only when the user supplies
+  // at least one -hardfield_* option.  Otherwise keep the KSP unprefixed so
+  // existing options_bjacobi files continue to provide its default options.
+
 
   ierr = KSPSetFromOptions(_ksp);
   CHKERRQ(ierr);
