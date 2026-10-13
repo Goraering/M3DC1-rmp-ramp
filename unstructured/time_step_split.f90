@@ -6,7 +6,7 @@ module time_step_split
 
   type(vector_type), private :: phi_vec, phip_vec
   type(vector_type), private :: vel_vec, veln_vec
-  type(vector_type), private :: pres_vec
+  type(vector_type), private :: pres_vec, presold_vec
   type(vector_type), private :: den_vec, denold_vec, ne_vec, neold_vec
   type(vector_type), private :: pret_vec
   type(vector_type), private :: nre_vec, nreold_vec
@@ -113,6 +113,10 @@ if (ispradapt .eq. 1) then
        call create_vector(qp4_vec,     vecsize_p, "qp4_vec")
        call mark_vector_for_solutiontransfer(pres_vec)
        call mark_vector_for_solutiontransfer(qp4_vec)
+       if(ipressplit.eq.1 .and. iestatic.eq.0) then
+          call create_vector(presold_vec, vecsize_p, "presold_vec")
+          call mark_vector_for_solutiontransfer(presold_vec)
+       end if
     endif
 
     call create_vector(den_vec,    vecsize_n, "den_vec")
@@ -161,6 +165,8 @@ else
     if(ipres.eq.1 .or. ipressplit.eq.1) then
        call create_vector(pres_vec,    vecsize_p)
        call create_vector(qp4_vec,     vecsize_p)
+       if(ipressplit.eq.1 .and. iestatic.eq.0) &
+            call create_vector(presold_vec, vecsize_p)
     endif
 
     call create_vector(den_vec,    vecsize_n)
@@ -217,6 +223,13 @@ call PetscLogStagePop(jer)
     call create_mat(d2_mat, vecsize_phi, vecsize_phi, icomplex, 0)
     call create_mat(r2_mat, vecsize_phi, vecsize_vel, icomplex, 0)
     call create_mat(q2_mat, vecsize_phi, vecsize_vel, icomplex, 0)
+
+    if(ipressplit.eq.1) then
+       call set_matrix_index(r44_mat, r44_mat_index)
+       call set_matrix_index(q44_mat, q44_mat_index)
+       call create_mat(r44_mat, vecsize_phi, vecsize_p, icomplex, 0)
+       call create_mat(q44_mat, vecsize_phi, vecsize_p, icomplex, 0)
+    endif
 
     if(idens.eq.1) then
        call set_matrix_index(r42_mat, r42_mat_index)
@@ -308,6 +321,9 @@ call PetscLogStagePop(jer)
     integer :: jer
 
     if(.not.initialized) return
+
+    if(ipressplit.eq.1 .and. iestatic.eq.0) &
+         call destroy_vector(presold_vec)
       
 call PetscLogStagePush(stageA,jer)
     call destroy_mat(s1_mat)
@@ -321,6 +337,10 @@ call PetscLogStagePop(jer)
     call destroy_mat(d2_mat)
     call destroy_mat(r2_mat)
     call destroy_mat(q2_mat)
+    if(ipressplit.eq.1) then
+       call destroy_mat(r44_mat)
+       call destroy_mat(q44_mat)
+    end if
     if(idens.eq.1) then
        call destroy_mat(r42_mat)
        call destroy_mat(q42_mat)
@@ -520,6 +540,10 @@ call PetscLogStagePop(jer)
     call clear_mat(d2_mat)
     call clear_mat(r2_mat)
     call clear_mat(q2_mat)
+    if(ipressplit.eq.1) then
+       call clear_mat(r44_mat)
+       call clear_mat(q44_mat)
+    end if
     if(idens.eq.1) then
        call clear_mat(r42_mat)
        call clear_mat(q42_mat)
@@ -589,6 +613,10 @@ call PetscLogStagePop(jer)
     call finalize(d2_mat)
     call finalize(r2_mat)
     call finalize(q2_mat)
+    if(ipressplit.eq.1) then
+       call finalize(r44_mat)
+       call finalize(q44_mat)
+    end if
     call flush(s2_mat)
     if(i3d.eq.1) then
       call finalize(o2_mat)
@@ -820,6 +848,9 @@ subroutine step_split(calc_matrices)
 
   ! Store current-time velocity matrices for use in field advance
   veln_vec = vel_vec
+
+  ! Keep old pressure for both field solves, including temperature advance.
+  if(ipressplit.eq.1 .and. iestatic.eq.0) presold_vec = pres_vec
 
   if(istatic.ne.1) then
 
@@ -1284,6 +1315,15 @@ call PetscLogStagePop(jer)
      call matvecmult(d2_mat,phi_vec,b2_phi)
      call add(b1_phi, b2_phi)
 
+     ! Eliminate the already-solved pressure: D_Bp*p(old) - S_Bp*p(new).
+     if(ipressplit.eq.1) then
+        call matvecmult(r44_mat,pres_vec,b2_phi)
+        call mult(b2_phi, -1.)
+        call add(b1_phi, b2_phi)
+        call matvecmult(q44_mat,presold_vec,b2_phi)
+        call add(b1_phi, b2_phi)
+     end if
+
      ! Inculde density terms
      if(idens.eq.1) then
 #ifdef USEPARTICLES
@@ -1416,6 +1456,15 @@ call PetscLogStagePop(jer)
         ! d2matrix_sm * phi(n)
         call matvecmult(d2_mat,phi_vec,b2_phi)
         call add(b1_phi, b2_phi)
+
+        ! Eliminate the already-solved pressure: D_Bp*p(old) - S_Bp*p(new).
+        if(ipressplit.eq.1) then
+           call matvecmult(r44_mat,pres_vec,b2_phi)
+           call mult(b2_phi, -1.)
+           call add(b1_phi, b2_phi)
+           call matvecmult(q44_mat,presold_vec,b2_phi)
+           call add(b1_phi, b2_phi)
+        end if
       
         ! Include density terms
         if(idens.eq.1) then

@@ -5412,6 +5412,10 @@ subroutine ludefphi_n(itri)
      bsource => q4_vec
      pp_i = pe_i
      ppe_i = pe_i
+     if(ipressplit.eq.1) then
+        pp_i = p_i
+        if(ipres.eq.0) ppe_i = p_i
+     end if
      maxk = vecsize_phi
   else
      bb1 => s1_mat
@@ -5525,7 +5529,7 @@ subroutine ludefphi_n(itri)
      ! If electron pressure equation is not included,
      ! terms that should multiply pe will instead multiply p
      ! so we multiply these terms my pefac
-     if(.not.(ipres.eq.1 .and. numvar.ge.3) .and. ipressplit.eq.0) then
+     if(.not.(ipres.eq.1 .and. numvar.ge.3)) then
         ss(:,:,pe_g) = ss(:,:,pe_g)*pefac
         dd(:,:,pe_g) = dd(:,:,pe_g)*pefac
      end if
@@ -5598,6 +5602,12 @@ subroutine ludefphi_n(itri)
            if(idiff .gt. 0) dd(:,:,pe_g) = dd(:,:,pe_g) - ss(:,:,pe_g)
            call insert_block(bb1,itri,ieq(k), ppe_i,ss(:,:, pe_g),MAT_ADD)
            call insert_block(bb0,itri,ieq(k), ppe_i,dd(:,:, pe_g),MAT_ADD)
+        else
+           ! Split pressure is a full known value, also when idiff > 0.
+           call insert_block(r44_mat,itri,ieq(k), pp_i,ss(:,:, p_g),MAT_ADD)
+           call insert_block(q44_mat,itri,ieq(k), pp_i,dd(:,:, p_g),MAT_ADD)
+           call insert_block(r44_mat,itri,ieq(k),ppe_i,ss(:,:,pe_g),MAT_ADD)
+           call insert_block(q44_mat,itri,ieq(k),ppe_i,dd(:,:,pe_g),MAT_ADD)
         end if
         call insert_block(bv1,itri,ieq(k),chi_i,ss(:,:,chi_g),MAT_ADD)
         call insert_block(bv0,itri,ieq(k),chi_i,dd(:,:,chi_g),MAT_ADD)
